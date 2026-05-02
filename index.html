@@ -1492,8 +1492,7 @@ const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemi
 let activeNewsTicker = null;
 let activeNewsSeg = 'news';
 
-async function geminiSummarize(text) {
-  const prompt = `다음 영문 기사를 한국어로 2-3문장으로 간결하게 요약해줘. 투자자 관점에서 핵심만. 번역투 없이 자연스럽게:\n\n${text}`;
+async function geminiAsk(prompt) {
   try {
     const r = await fetch(GEMINI_URL, {
       method: 'POST',
@@ -1501,8 +1500,17 @@ async function geminiSummarize(text) {
       body: JSON.stringify({contents:[{parts:[{text:prompt}]}]})
     });
     const d = await r.json();
-    return d.candidates?.[0]?.content?.parts?.[0]?.text || null;
+    return d.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || null;
   } catch(e) { return null; }
+}
+
+async function geminiTranslateTitle(title) {
+  return await geminiAsk(`다음 영문 주식 기사 제목을 자연스러운 한국어로 번역해줘. 번역문만 출력:\n${title}`);
+}
+
+async function geminiSummarize(title, summary) {
+  const text = title + (summary ? '. ' + summary : '');
+  return await geminiAsk(`다음 영문 주식 기사를 한국어로 2-3문장으로 간결하게 요약해줘. 투자자 관점에서 핵심만. 번역투 없이 자연스럽게:\n\n${text}`);
 }
 
 function switchNewsSeg(seg) {
@@ -1553,11 +1561,11 @@ async function loadNews(ticker) {
     const news = d?.news || [];
     if (!news.length) { el.innerHTML='<div class="empty">뉴스가 없습니다</div>'; return; }
 
-    // 카드 먼저 표시 (요약 없이)
+    // 카드 먼저 표시
     el.innerHTML = news.map((n,i) => `
       <div class="news-item" onclick="window.open('${n.link}','_blank')" id="news-${i}">
-        <div class="news-title">${n.title}</div>
-        <div class="news-summary" id="summary-${i}" style="color:var(--t4);font-style:italic;">요약 중...</div>
+        <div class="news-title" id="title-${i}">${n.title}</div>
+        <div class="news-summary" id="summary-${i}" style="color:var(--t4);font-style:italic;">번역 중...</div>
         <div class="news-meta">
           <span class="news-src">${n.publisher||''}</span>
           <span>${n.providerPublishTime ? new Date(n.providerPublishTime*1000).toLocaleDateString('ko-KR') : ''}</span>
@@ -1565,24 +1573,37 @@ async function loadNews(ticker) {
       </div>
     `).join('');
 
-    // Gemini로 순차 요약
-    for (let i=0; i<Math.min(news.length,5); i++) {
+    // Gemini로 순차 처리 (제목 번역 + 요약)
+    for (let i=0; i<news.length; i++) {
       const n = news[i];
-      const textToSummarize = n.title + (n.summary ? '. ' + n.summary : '');
-      const summary = await geminiSummarize(textToSummarize);
-      const summaryEl = document.getElementById(`summary-${i}`);
-      if (summaryEl) {
-        summaryEl.textContent = summary || n.title;
-        summaryEl.style.color = 'var(--t3)';
-        summaryEl.style.fontStyle = 'normal';
+      // 상위 5개는 요약, 나머지는 제목 번역만
+      let titleKo, summaryKo;
+      if (i < 5) {
+        // 한번에 제목+요약 같이 요청 (API 호출 절약)
+        const result = await geminiAsk(
+          `주식 기사를 분석해줘. 아래 형식으로만 답해:\n제목: [한국어 제목 번역]\n요약: [2-3문장 한국어 요약, 투자자 관점]\n\n원문 제목: ${n.title}\n원문 내용: ${n.summary||n.title}`
+        );
+        if (result) {
+          const titleMatch = result.match(/제목:\s*(.+)/);
+          const summaryMatch = result.match(/요약:\s*([\s\S]+)/);
+          titleKo = titleMatch?.[1]?.trim();
+          summaryKo = summaryMatch?.[1]?.trim();
+        }
+      } else {
+        titleKo = await geminiTranslateTitle(n.title);
       }
-    }
-    // 나머지는 제목으로
-    for (let i=5; i<news.length; i++) {
+
+      const titleEl = document.getElementById(`title-${i}`);
       const summaryEl = document.getElementById(`summary-${i}`);
+      if (titleEl && titleKo) titleEl.textContent = titleKo;
       if (summaryEl) {
-        summaryEl.textContent = '';
-        summaryEl.style.display = 'none';
+        if (summaryKo) {
+          summaryEl.textContent = summaryKo;
+          summaryEl.style.color = 'var(--t3)';
+          summaryEl.style.fontStyle = 'normal';
+        } else {
+          summaryEl.style.display = 'none';
+        }
       }
     }
   } catch(e) {
@@ -1594,39 +1615,43 @@ async function loadCalendar(ticker) {
   const el = document.getElementById('calSection');
   el.innerHTML = '<div class="news-loading">📅 일정 불러오는 중...</div>';
   try {
-    // Yahoo Finance 어닝/배당 데이터
-    const [earnings, stats] = await Promise.all([
-      fetchJSON(`https://query1.finance.yahoo.com/v10/finance/quoteSummary/${ticker}?modules=calendarEvents,earningsTrend`),
-      fetchJSON(`https://query1.finance.yahoo.com/v10/finance/quoteSummary/${ticker}?modules=defaultKeyStatistics,summaryDetail`)
-    ]);
+    const d = await fetchJSON(`https://query1.finance.yahoo.com/v11/finance/quoteSummary/${ticker}?modules=calendarEvents%2CsummaryDetail%2CdefaultKeyStatistics`);
+    const result = d?.quoteSummary?.result?.[0];
 
-    const events = [];
-    const cal = earnings?.quoteSummary?.result?.[0]?.calendarEvents;
-    const detail = stats?.quoteSummary?.result?.[0]?.summaryDetail;
-    const keyStats = stats?.quoteSummary?.result?.[0]?.defaultKeyStatistics;
+    if (!result) throw new Error('데이터 없음');
+
+    const cal      = result.calendarEvents;
+    const detail   = result.summaryDetail;
+    const keyStats = result.defaultKeyStatistics;
+    const events   = [];
 
     // 어닝 발표일
-    if (cal?.earnings?.earningsDate?.length) {
-      cal.earnings.earningsDate.forEach(d => {
-        const date = new Date(d.raw * 1000);
-        events.push({ date, type:'earn', label:'어닝 발표', detail:'실적 발표 예정일' });
+    const earningDates = cal?.earnings?.earningsDate || [];
+    earningDates.forEach(d => {
+      if (d?.raw) events.push({
+        date: new Date(d.raw * 1000),
+        type: 'earn',
+        label: '어닝 발표',
+        detail: '실적 발표 예정'
       });
-    }
+    });
 
-    // 배당
+    // 배당락일
     if (detail?.exDividendDate?.raw) {
       events.push({
         date: new Date(detail.exDividendDate.raw * 1000),
-        type:'div',
-        label:'배당락일',
+        type: 'div',
+        label: '배당락일 (Ex-Dividend)',
         detail: `배당금 $${detail.dividendRate?.fmt||'—'} · 수익률 ${detail.dividendYield?.fmt||'—'}`
       });
     }
+
+    // 배당 지급일
     if (cal?.dividendDate?.raw) {
       events.push({
         date: new Date(cal.dividendDate.raw * 1000),
-        type:'div',
-        label:'배당 지급일',
+        type: 'div',
+        label: '배당 지급일',
         detail: `배당금 $${detail?.dividendRate?.fmt||'—'}`
       });
     }
@@ -1635,39 +1660,63 @@ async function loadCalendar(ticker) {
     if (keyStats?.lastSplitDate?.raw) {
       events.push({
         date: new Date(keyStats.lastSplitDate.raw * 1000),
-        type:'split',
-        label:'최근 주식 분할',
-        detail: keyStats.lastSplitFactor?.fmt || '—'
+        type: 'split',
+        label: '주식 분할',
+        detail: `비율 ${keyStats.lastSplitFactor?.fmt||'—'}`
       });
     }
 
+    // 52주 고저 + EPS (보조 정보로 상단 표시)
+    const w52High = detail?.fiftyTwoWeekHigh?.fmt;
+    const w52Low  = detail?.fiftyTwoWeekLow?.fmt;
+    const eps     = keyStats?.trailingEps?.fmt;
+    const pe      = detail?.trailingPE?.fmt;
+    const beta    = detail?.beta?.fmt;
+
+    let infoHtml = '';
+    if (w52High || eps) {
+      infoHtml = `
+        <div class="card" style="margin-bottom:14px;padding:12px 14px;">
+          <div style="font-size:11px;font-weight:700;color:var(--t4);letter-spacing:2px;margin-bottom:10px;">KEY STATS</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+            ${w52High?`<div><div style="font-size:10px;color:var(--t4);">52주 최고</div><div style="font-family:'JetBrains Mono';font-weight:700;color:var(--red2);">$${w52High}</div></div>`:''}
+            ${w52Low ?`<div><div style="font-size:10px;color:var(--t4);">52주 최저</div><div style="font-family:'JetBrains Mono';font-weight:700;color:var(--green);">$${w52Low}</div></div>`:''}
+            ${eps    ?`<div><div style="font-size:10px;color:var(--t4);">EPS (TTM)</div><div style="font-family:'JetBrains Mono';font-weight:700;color:var(--t1);">$${eps}</div></div>`:''}
+            ${pe     ?`<div><div style="font-size:10px;color:var(--t4);">P/E (TTM)</div><div style="font-family:'JetBrains Mono';font-weight:700;color:var(--t1);">${pe}</div></div>`:''}
+            ${beta   ?`<div><div style="font-size:10px;color:var(--t4);">베타</div><div style="font-family:'JetBrains Mono';font-weight:700;color:var(--t1);">${beta}</div></div>`:''}
+          </div>
+        </div>
+      `;
+    }
+
     if (!events.length) {
-      el.innerHTML = '<div class="empty">예정된 일정이 없습니다</div>';
+      el.innerHTML = infoHtml + '<div class="empty">예정된 일정이 없습니다</div>';
       return;
     }
 
-    events.sort((a,b)=>a.date-b.date);
     const now = new Date();
-    const upcoming = events.filter(e => e.date >= now);
-    const past     = events.filter(e => e.date < now);
-    const allSorted = [...upcoming, ...past];
+    events.sort((a,b) => {
+      const aUp = a.date >= now, bUp = b.date >= now;
+      if (aUp && !bUp) return -1;
+      if (!aUp && bUp) return 1;
+      return a.date - b.date;
+    });
 
-    el.innerHTML = allSorted.map(e => {
+    const months = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+    el.innerHTML = infoHtml + events.map(e => {
       const isPast = e.date < now;
-      const months = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
       return `
-        <div class="cal-item" style="${isPast?'opacity:0.5':''}">
-          <div class="cal-date">
+        <div class="cal-item" style="${isPast?'opacity:0.45':''}">
+          <div class="cal-date" style="${!isPast?'background:rgba(77,168,255,0.1);border:1px solid rgba(77,168,255,0.3);':''}">
             <div class="cal-month">${months[e.date.getMonth()]}</div>
             <div class="cal-day">${e.date.getDate()}</div>
             <div style="font-size:9px;color:var(--t4);">${e.date.getFullYear()}</div>
           </div>
           <div class="cal-info">
-            <div class="cal-type ${e.type}">${
-              e.type==='earn'?'📊 '+e.label:
-              e.type==='div' ?'💰 '+e.label:
-              e.type==='split'?'✂️ '+e.label:'📌 '+e.label
-            } ${isPast?'<span style="font-size:10px;color:var(--t5)">(완료)</span>':''}</div>
+            <div class="cal-type ${e.type}">
+              ${e.type==='earn'?'📊':e.type==='div'?'💰':e.type==='split'?'✂️':'📌'} ${e.label}
+              ${isPast?'<span style="font-size:10px;color:var(--t5);margin-left:4px;">(완료)</span>':'<span style="font-size:10px;color:var(--blue);margin-left:4px;">▶ 예정</span>'}
+            </div>
             <div class="cal-detail">${e.detail}</div>
           </div>
         </div>
@@ -1675,7 +1724,7 @@ async function loadCalendar(ticker) {
     }).join('');
 
   } catch(e) {
-    el.innerHTML = `<div class="empty">일정 로드 실패<br><span style="font-size:12px">${e.message}</span></div>`;
+    el.innerHTML = `<div class="empty">일정 로드 실패<br><span style="font-size:12px;color:var(--t4)">${e.message}</span></div>`;
   }
 }
 
