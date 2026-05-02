@@ -481,36 +481,11 @@ body{
 <div class="pg" id="pg-settings">
   <div style="padding-top:14px;">
 
-    <div class="sec">Firebase 설정 (영구 저장)</div>
-    <div class="card" style="margin-bottom:10px;">
-      <div style="font-size:13px;color:var(--t3);line-height:1.7;margin-bottom:14px;">
-        Firebase를 연결하면 쿠키 삭제 후에도 종목이 유지됩니다.<br>
-        <span style="font-size:11px;color:var(--t4);">각자 닉네임+비밀번호로 완전히 분리 저장됩니다.</span>
-      </div>
-      <textarea id="fbConfigInp" rows="5"
-        style="width:100%;background:var(--bg2);border:1.5px solid var(--border2);border-radius:10px;color:var(--t1);font-family:'JetBrains Mono',monospace;font-size:11px;padding:12px;outline:none;resize:none;line-height:1.6;"
-        placeholder='Firebase 설정 JSON 붙여넣기&#10;{&#10;  "apiKey": "...",&#10;  "databaseURL": "...",&#10;  "projectId": "..."&#10;}'></textarea>
-      <button onclick="saveFBConfig()"
-        style="width:100%;background:var(--green);color:#000;border:none;border-radius:10px;padding:12px;font-size:14px;font-weight:700;cursor:pointer;margin-top:8px;">저장</button>
-      <div id="fbStatus" style="margin-top:10px;font-size:12px;text-align:center;"></div>
-    </div>
-
-    <div class="card" style="margin-bottom:10px;">
-      <div style="font-size:12px;color:var(--t3);line-height:2;">
-        <b style="color:var(--t2);">Firebase 설정 방법</b><br>
-        1. <span style="color:var(--blue);">console.firebase.google.com</span> 접속<br>
-        2. 프로젝트 추가 → 이름 입력 → 생성<br>
-        3. 빌드 → Realtime Database → 데이터베이스 만들기<br>
-        &nbsp;&nbsp;&nbsp;→ 테스트 모드로 시작<br>
-        4. 프로젝트 설정 → 내 앱 → 웹앱 추가(&#60;/&#62;)<br>
-        5. firebaseConfig 전체 복사 → 위에 붙여넣기
-      </div>
-    </div>
-
     <div class="sec">계정</div>
     <div class="card" style="margin-bottom:10px;">
-      <div style="font-size:13px;color:var(--t3);margin-bottom:12px;">
-        현재: <span id="currentUserLabel" style="color:var(--t1);font-weight:700;">—</span>
+      <div style="font-size:13px;color:var(--t3);margin-bottom:12px;line-height:1.7;">
+        현재 로그인: <span id="currentUserLabel" style="color:var(--t1);font-weight:700;">—</span><br>
+        <span style="font-size:11px;color:var(--t4);">같은 폰에서 닉네임+비밀번호로 유지됩니다</span>
       </div>
       <button onclick="logout()"
         style="width:100%;background:var(--card2);border:1px solid var(--border2);border-radius:10px;padding:12px;font-size:14px;font-weight:600;color:var(--t3);cursor:pointer;">
@@ -527,7 +502,7 @@ body{
       </button>
     </div>
 
-    <div class="disc">버전 4.0 · 순수 기술적 분석 · Yahoo Finance 실시간</div>
+    <div class="disc">오늘만 타점 분석기 v4.1 · 순수 기술적 분석 · Yahoo Finance</div>
   </div>
 </div>
 
@@ -563,28 +538,24 @@ let currentTF = '1M';
 let currentUser = null; // { nick, pwHash }
 
 // ═══════════════════════════════════════════════
-// FIREBASE (Realtime DB)
+// FIREBASE REST
 // ═══════════════════════════════════════════════
-let _db = null;
-const FB_URL = 'https://stock-signal-ea848-default-rtdb.firebaseio.com';
+const FB = 'https://stock-signal-ea848-default-rtdb.firebaseio.com';
 
 async function fbGet(path) {
-  const r = await fetch(`${FB_URL}/${path}.json`);
-  if (!r.ok) throw new Error('FB read error ' + r.status);
-  return r.json();
+  const r = await fetch(`${FB}/${path}.json`, {cache:'no-store'});
+  if (!r.ok) throw new Error('읽기 오류 ' + r.status);
+  return await r.json();
 }
 
 async function fbSet(path, data) {
-  const r = await fetch(`${FB_URL}/${path}.json`, {
+  const r = await fetch(`${FB}/${path}.json`, {
     method: 'PUT',
-    headers: {'Content-Type':'application/json'},
     body: JSON.stringify(data)
   });
-  if (!r.ok) throw new Error('FB write error ' + r.status);
-  return r.json();
+  if (!r.ok) throw new Error('쓰기 오류 ' + r.status);
 }
 
-// 비밀번호 해시
 async function hashPw(pw) {
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(pw));
   return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
@@ -602,27 +573,26 @@ async function doLogin() {
   msg.innerHTML='<span style="color:var(--t4)">확인 중...</span>';
 
   try {
-    const pwHash = await hashPw(pw);
-    const existing = await fbGet(`users/${nick}`);
+    const pwHash = await hashPw(nick + pw); // nick+pw 조합으로 해시
+    const safeName = nick.replace(/[^a-zA-Z0-9가-힣_]/g, '_');
+    const data = await fbGet(`users/${safeName}`);
 
-    if (existing) {
-      // 기존 유저 — 비번 확인
-      if (existing.pwHash !== pwHash) {
+    if (data) {
+      if (data.pwHash !== pwHash) {
         msg.innerHTML='<span style="color:var(--red2)">비밀번호가 틀렸습니다</span>';
         return;
       }
-      holdings  = existing.holdings  || [];
-      watchlist = existing.watchlist || [];
+      holdings  = data.holdings  || [];
+      watchlist = data.watchlist || [];
       toast('✅ 로그인 완료!');
     } else {
-      // 신규 유저 — 계정 생성
-      await fbSet(`users/${nick}`, { pwHash, holdings:[], watchlist:[] });
+      await fbSet(`users/${safeName}`, { pwHash, holdings:[], watchlist:[] });
       holdings = []; watchlist = [];
       toast('✅ 계정 생성 완료!');
     }
 
-    currentUser = { nick, pwHash };
-    localStorage.setItem('last_user', JSON.stringify({ nick, pwHash }));
+    currentUser = { nick, safeName, pwHash };
+    localStorage.setItem('ot_last', JSON.stringify({ nick, safeName, pwHash }));
     document.getElementById('loginOverlay').classList.add('hidden');
     renderLists(); switchSeg('holding');
     updateUserDisplay();
@@ -632,7 +602,6 @@ async function doLogin() {
   }
 }
 
-// 로그인 입력창 엔터 지원
 document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('loginNick')?.addEventListener('keydown', e=>{ if(e.key==='Enter') document.getElementById('loginPw').focus(); });
   document.getElementById('loginPw')?.addEventListener('keydown',   e=>{ if(e.key==='Enter') doLogin(); });
@@ -646,20 +615,20 @@ function updateUserDisplay() {
 // ── 저장 ──
 async function save() {
   if (!currentUser) return;
-  const { nick, pwHash } = currentUser;
-  // 로컬 백업
-  localStorage.setItem(`h_${nick}_${pwHash.slice(0,8)}`, JSON.stringify(holdings));
-  localStorage.setItem(`w_${nick}_${pwHash.slice(0,8)}`, JSON.stringify(watchlist));
-  // Firebase REST 저장
+  const { safeName, pwHash } = currentUser;
+  // 로컬 백업 (오프라인 대비)
+  localStorage.setItem('ot_h', JSON.stringify(holdings));
+  localStorage.setItem('ot_w', JSON.stringify(watchlist));
+  // Firebase 저장
   try {
-    await fbSet(`users/${nick}`, { pwHash, holdings, watchlist });
-  } catch(e) { console.warn('Firebase 저장 실패', e); }
+    await fbSet(`users/${safeName}`, { pwHash, holdings, watchlist });
+  } catch(e) { console.warn('저장 실패:', e); }
 }
 
 function logout() {
   if (!confirm('로그아웃 하시겠어요?')) return;
   currentUser = null;
-  localStorage.removeItem('last_user');
+  localStorage.removeItem('ot_last');
   holdings = []; watchlist = []; cache = {};
   document.getElementById('loginNick').value = '';
   document.getElementById('loginPw').value = '';
@@ -822,14 +791,8 @@ function saveFBConfig() {
 }
 
 function renderSettingsStatus() {
-  const cfg = getFirebaseConfig();
-  const fbEl = document.getElementById('fbStatus');
-  const userEl = document.getElementById('currentUserLabel');
-  if (fbEl) fbEl.innerHTML = cfg
-    ? `<span style="color:var(--green)">✅ 연결됨: ${cfg.projectId}</span>`
-    : `<span style="color:var(--t4)">미설정 · 로컬 저장 모드</span>`;
-  if (fbEl && cfg) document.getElementById('fbConfigInp').value = JSON.stringify(cfg, null, 2);
-  if (userEl) userEl.textContent = currentUser ? currentUser.nick : '—';
+  const el = document.getElementById('currentUserLabel');
+  if (el) el.textContent = currentUser ? currentUser.nick : '—';
 }
 
 function resetAll() {
@@ -1479,32 +1442,31 @@ function renderSummary() {
 // INIT
 // ═══════════════════════════════════════════════
 (async () => {
-  const last = localStorage.getItem('last_user');
+  const last = localStorage.getItem('ot_last');
   if (last) {
     try {
-      const { nick, pwHash } = JSON.parse(last);
-      // Firebase REST로 자동 로그인 시도
-      const existing = await fbGet(`users/${nick}`);
-      if (existing && existing.pwHash === pwHash) {
-        holdings  = existing.holdings  || [];
-        watchlist = existing.watchlist || [];
-        currentUser = { nick, pwHash };
+      const { nick, safeName, pwHash } = JSON.parse(last);
+      const data = await fbGet(`users/${safeName}`);
+      if (data && data.pwHash === pwHash) {
+        holdings  = data.holdings  || [];
+        watchlist = data.watchlist || [];
+        currentUser = { nick, safeName, pwHash };
         document.getElementById('loginOverlay').classList.add('hidden');
         renderLists(); switchSeg('holding');
         updateUserDisplay();
         return;
       }
     } catch(e) {
-      // 네트워크 실패 시 로컬에서 복원
+      // 네트워크 실패 시 로컬 백업 사용
       try {
-        const { nick, pwHash } = JSON.parse(last);
-        holdings  = JSON.parse(localStorage.getItem(`h_${nick}_${pwHash.slice(0,8)}`) || '[]');
-        watchlist = JSON.parse(localStorage.getItem(`w_${nick}_${pwHash.slice(0,8)}`) || '[]');
-        currentUser = { nick, pwHash };
+        const { nick, safeName, pwHash } = JSON.parse(last);
+        holdings  = JSON.parse(localStorage.getItem('ot_h') || '[]');
+        watchlist = JSON.parse(localStorage.getItem('ot_w') || '[]');
+        currentUser = { nick, safeName, pwHash };
         document.getElementById('loginOverlay').classList.add('hidden');
         renderLists(); switchSeg('holding');
         updateUserDisplay();
-        toast('오프라인 모드 · 로컬 데이터 사용');
+        toast('오프라인 모드');
         return;
       } catch(e2) {}
     }
