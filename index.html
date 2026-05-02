@@ -681,6 +681,39 @@ async function save() {
   } catch(e) { console.warn('저장 실패:', e); }
 }
 
+// 분석 결과 캐시 저장 (재분석 없이 복원)
+function saveCache() {
+  try {
+    const slim = {};
+    for (const [ticker, c] of Object.entries(cache)) {
+      if (!c.result) continue;
+      slim[ticker] = {
+        quote:   c.quote,
+        result:  c.result,
+        analyst: c.analyst || null,
+        type:    c.type,
+        savedAt: Date.now()
+      };
+      // hist는 용량이 커서 제외 (재분석 시 다시 fetch)
+    }
+    localStorage.setItem('ot_cache', JSON.stringify(slim));
+  } catch(e) {}
+}
+
+function loadCache() {
+  try {
+    const raw = localStorage.getItem('ot_cache');
+    if (!raw) return;
+    const slim = JSON.parse(raw);
+    const now = Date.now();
+    const MAX_AGE = 12 * 60 * 60 * 1000; // 12시간 이내만 복원
+    for (const [ticker, c] of Object.entries(slim)) {
+      if (now - c.savedAt > MAX_AGE) continue;
+      cache[ticker] = c;
+    }
+  } catch(e) {}
+}
+
 function logout() {
   if (!confirm('로그아웃 하시겠어요?')) return;
   currentUser = null;
@@ -1285,6 +1318,7 @@ async function runAll() {
   document.getElementById('prog').classList.remove('on');
   btn.disabled=false; btn.textContent='전체 분석 실행';
   ref.classList.remove('spin');
+  saveCache(); // 분석 결과 캐시 저장
   toast('✅ 분석 완료!');
 }
 
@@ -1834,8 +1868,15 @@ async function loadCalendar(ticker) {
         watchlist = data.watchlist || [];
         currentUser = { nick, safeName, pwHash };
         document.getElementById('loginOverlay').classList.add('hidden');
+        loadCache(); // 이전 분석 결과 복원
         renderLists(); switchSeg('holding');
         updateUserDisplay();
+        // 캐시 있으면 바로 분석 화면 표시
+        const first = [...holdings, ...watchlist][0];
+        if (first && cache[first.ticker]?.result) {
+          renderAnalysis(first.ticker);
+          renderSummary();
+        }
         return;
       }
     } catch(e) {
@@ -1846,9 +1887,17 @@ async function loadCalendar(ticker) {
         watchlist = JSON.parse(localStorage.getItem('ot_w') || '[]');
         currentUser = { nick, safeName, pwHash };
         document.getElementById('loginOverlay').classList.add('hidden');
+        loadCache(); // 이전 분석 결과 복원
         renderLists(); switchSeg('holding');
         updateUserDisplay();
-        toast('오프라인 모드');
+        const first = [...holdings, ...watchlist][0];
+        if (first && cache[first.ticker]?.result) {
+          renderAnalysis(first.ticker);
+          renderSummary();
+          toast('오프라인 모드 · 이전 분석 결과 표시 중');
+        } else {
+          toast('오프라인 모드');
+        }
         return;
       } catch(e2) {}
     }
