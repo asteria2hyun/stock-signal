@@ -1568,7 +1568,7 @@ async function loadNews(ticker) {
         <div class="news-summary" id="summary-${i}" style="color:var(--t4);font-style:italic;">번역 중...</div>
         <div class="news-meta">
           <span class="news-src">${n.publisher||''}</span>
-          <span>${n.providerPublishTime ? new Date(n.providerPublishTime*1000).toLocaleDateString('ko-KR') : ''}</span>
+          <span>${n.providerPublishTime ? new Date(n.providerPublishTime*1000).toLocaleString('ko-KR', {timeZone:'Asia/Seoul', year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', hour12:false}) : ''}</span>
         </div>
       </div>
     `).join('');
