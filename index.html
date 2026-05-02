@@ -792,8 +792,14 @@ function editQty(ticker, i) {
   const parsed = parseInt(newQty);
   if (isNaN(parsed) || parsed < 0) { toast('올바른 수량을 입력해주세요'); return; }
   holdings[i].qty = parsed;
-  // 분석 결과도 수량 반영 업데이트
-  if (cache[ticker]?.result) cache[ticker].result.sellQty = Math.max(1, Math.round(parsed * (cache[ticker].result.score <= -4 ? 0.5 : 0.25)));
+  // 분석 결과 수량 업데이트 — 6단계 비율 유지
+  if (cache[ticker]?.result) {
+    const r = cache[ticker].result;
+    const pcts = [[-4.5,0.70],[-3.5,0.50],[-3.0,0.40],[-2.5,0.30],[-2.0,0.20],[-1.5,0.10]];
+    const entry = pcts.find(([s])=>r.score<=s);
+    const pct = entry ? entry[1] : 0;
+    r.sellQty = parsed ? Math.max(1, Math.round(parsed * pct)) : 0;
+  }
   save(); renderLists();
   toast(`${ticker} 수량 → ${parsed}주`);
 }
@@ -1147,27 +1153,48 @@ function analyze(data, qty, quote, mode) {
   // 항상 매도·매수 타점 둘 다 계산
   // 매수 타점
   const buyTgt  = adjustedScore >= 0
-    ? price                                              // 강세면 현재가 진입
-    : Math.max(price*(1-atrV*2/price), srV.sup);        // 약세면 지지선 or ATR 하단
+    ? price
+    : Math.max(price*(1-atrV*2/price), srV.sup);
   const buyGoal = buyTgt * (1 + Math.min(0.07, atrV/price*3));
   const buyStop = buyTgt * (1 - atrV*2/buyTgt);
 
-  // 매도 타점
-  const sellQtyStrong = qty ? Math.max(1,Math.round(qty*0.5)) : 0;
-  const sellQtyWeak   = qty ? Math.max(1,Math.round(qty*0.25)): 0;
+  // 매도 수량 — 점수에 따라 6단계로 세분화
+  function calcSellQty(qty, score) {
+    if (!qty) return 0;
+    let pct = 0;
+    if      (score <= -4.5) pct = 0.70;  // 70% — 매우 강한 매도
+    else if (score <= -3.5) pct = 0.50;  // 50% — 강한 매도
+    else if (score <= -3.0) pct = 0.40;  // 40%
+    else if (score <= -2.5) pct = 0.30;  // 30%
+    else if (score <= -2.0) pct = 0.20;  // 20%
+    else if (score <= -1.5) pct = 0.10;  // 10% — 가벼운 일부 실현
+    return Math.max(1, Math.round(qty * pct));
+  }
+
+  const sellQty = calcSellQty(qty, adjustedScore);
+  const sellPctLabel = adjustedScore <= -4.5 ? '70%'
+    : adjustedScore <= -3.5 ? '50%'
+    : adjustedScore <= -3.0 ? '40%'
+    : adjustedScore <= -2.5 ? '30%'
+    : adjustedScore <= -2.0 ? '20%'
+    : adjustedScore <= -1.5 ? '10%' : '0%';
+
   const sellTgt = adjustedScore <= -3.5
     ? price*(1+0.005)
     : adjustedScore <= -1.5
     ? price*(1+0.008)
     : Math.min(price*(1+Math.min(0.06,atrV/price*2.5)), srV.res*0.99);
-  const sellQty = adjustedScore <= -3.5 ? sellQtyStrong : sellQtyWeak;
   const sellStop = price*(1-atrV*2/price);
 
   // 추천 방향 결정
   let action, recommend, note='';
   if (mode === 'sell') {
-    if      (adjustedScore<=-3.5){ action='SELL'; recommend='sell'; note='강한 매도 신호 · 매도 추천'; }
-    else if (adjustedScore<=-1.5){ action='SELL'; recommend='sell'; note='부분 매도 신호 · 매도 추천'; }
+    if      (adjustedScore<=-4.5){ action='SELL'; recommend='sell'; note=`강한 매도 · ${sellPctLabel} 매도 추천`; }
+    else if (adjustedScore<=-3.5){ action='SELL'; recommend='sell'; note=`매도 추천 · ${sellPctLabel} 익절`; }
+    else if (adjustedScore<=-3.0){ action='SELL'; recommend='sell'; note=`부분 매도 · ${sellPctLabel} 권장`; }
+    else if (adjustedScore<=-2.5){ action='SELL'; recommend='sell'; note=`약한 매도 신호 · ${sellPctLabel} 일부 실현`; }
+    else if (adjustedScore<=-2.0){ action='SELL'; recommend='sell'; note=`소량 매도 · ${sellPctLabel} 리스크 관리`; }
+    else if (adjustedScore<=-1.5){ action='SELL'; recommend='sell'; note=`미세 조정 · ${sellPctLabel} 가볍게 실현`; }
     else if (adjustedScore>=3)   { action='HOLD'; recommend='hold'; note='추세 강세 · 홀드 추천'; }
     else                         { action='WAIT'; recommend='hold'; note='신호 불분명 · 관망 유지'; }
   } else {
@@ -1178,11 +1205,8 @@ function analyze(data, qty, quote, mode) {
   }
 
   return {action,recommend,score:adjustedScore,rawScore:score,pctBull,sigs,mode,note,
-    // 매도 정보
-    sellTgt,sellQty,sellStop,
-    // 매수 정보
+    sellTgt,sellQty,sellPctLabel,sellStop,
     buyTgt,buyGoal,buyStop,
-    // 공통
     rsiV,bbL,bbA,srV,fibV,atrV,
     lma20,lma50,lma200,ma20,ma50,e9,
     ml,ms,stK,stD,volR,price,
@@ -1451,7 +1475,11 @@ function renderSummary() {
       const {result:r,quote:q}=cache[h.ticker];
       const px=q?.price||r.price||0;
       let det='';
-      if(r.action==='SELL'){const pct=h.qty?Math.round(r.sellQty/h.qty*100):0;det=`<div class="irow"><span class="il">매도 예약가</span><span class="iv o">$${r.sellTgt?.toFixed(2)||'—'}</span></div><div class="irow"><span class="il">권장 수량</span><span class="iv r">${r.sellQty}주 (${pct}%)</span></div><div class="irow"><span class="il">손절가</span><span class="iv r">$${r.stopLoss?.toFixed(2)||'—'}</span></div>`;}
+      if(r.action==='SELL'){const pct=h.qty?Math.round(r.sellQty/h.qty*100):0;det=`<div class="irow"><span class="il">매도 타점</span><span class="iv o">$${r.sellTgt?.toFixed(2)||'—'}</span></div><div class="irow"><span class="il">권장 수량</span><span class="iv r">${r.sellQty}주 (${pct}%) · ${r.sellPctLabel||''}</span></div><div class="irow"><span class="il">손절가</span><span class="iv r">$${r.sellStop?.toFixed(2)||'—'}</span></div>`;}
+      else if(r.action==='BUY'){det=`<div class="irow"><span class="il">매수 진입가</span><span class="iv g">$${r.buyTgt?.toFixed(2)||'—'}</span></div><div class="irow"><span class="il">목표가</span><span class="iv g">$${r.buyGoal?.toFixed(2)||'—'}</span></div><div class="irow"><span class="il">손절가</span><span class="iv r">$${r.buyStop?.toFixed(2)||'—'}</span></div>`;}
+      else if(r.action==='HOLD'){det=`<div class="irow"><span class="il">상태</span><span class="iv b">홀드 유지</span></div><div class="irow"><span class="il">손절가</span><span class="iv r">$${r.sellStop?.toFixed(2)||'—'}</span></div>`;}
+      else{det=`<div class="irow"><span class="il">대기가</span><span class="iv y">$${(r.buyTgt||r.sellTgt)?.toFixed(2)||'—'}</span></div>`;}
+
       else if(r.action==='BUY'){det=`<div class="irow"><span class="il">진입 추천가</span><span class="iv g">$${r.buyTgt?.toFixed(2)||'—'}</span></div><div class="irow"><span class="il">목표가</span><span class="iv g">$${r.sellTgt?.toFixed(2)||'—'}</span></div><div class="irow"><span class="il">손절가</span><span class="iv r">$${r.stopLoss?.toFixed(2)||'—'}</span></div>`;}
       else if(r.action==='HOLD'){det=`<div class="irow"><span class="il">손절가</span><span class="iv r">$${r.stopLoss?.toFixed(2)||'—'}</span></div>`;}
       else{det=`<div class="irow"><span class="il">대기가</span><span class="iv b">$${(r.buyTgt||r.sellTgt)?.toFixed(2)||'—'}</span></div>`;}
