@@ -398,6 +398,35 @@ body{
 .empty{text-align:center;padding:40px 20px;color:var(--t4);font-size:14px;line-height:1.8;}
 .disc{font-size:10px;color:var(--t5);line-height:1.7;padding:14px;text-align:center;border-top:1px solid var(--border);margin-top:8px;}
 
+/* ── NEWS & CALENDAR ── */
+.news-item{
+  background:var(--card);border:1px solid var(--border);border-radius:12px;
+  padding:14px;margin-bottom:10px;cursor:pointer;transition:opacity .15s;
+}
+.news-item:active{opacity:.75;}
+.news-title{font-size:14px;font-weight:600;color:var(--t1);line-height:1.5;margin-bottom:6px;}
+.news-summary{font-size:12px;color:var(--t3);line-height:1.7;margin-bottom:8px;}
+.news-meta{display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--t4);}
+.news-src{color:var(--blue);font-weight:600;}
+.news-loading{text-align:center;padding:20px;color:var(--t4);font-size:13px;}
+.cal-item{
+  background:var(--card);border:1px solid var(--border);border-radius:12px;
+  padding:14px;margin-bottom:8px;display:flex;align-items:center;gap:14px;
+}
+.cal-date{
+  background:var(--card2);border-radius:8px;padding:6px 10px;
+  text-align:center;flex-shrink:0;min-width:52px;
+}
+.cal-month{font-size:9px;color:var(--t4);letter-spacing:1px;text-transform:uppercase;}
+.cal-day{font-family:'JetBrains Mono',monospace;font-size:20px;font-weight:700;color:var(--t1);line-height:1;}
+.cal-info{flex:1;}
+.cal-type{font-size:12px;font-weight:700;margin-bottom:3px;}
+.cal-type.earn{color:var(--blue);}
+.cal-type.div{color:var(--green);}
+.cal-type.split{color:var(--purple);}
+.cal-type.other{color:var(--yellow);}
+.cal-detail{font-size:12px;color:var(--t3);}
+
 /* ── TOAST ── */
 .toast{
   position:fixed;bottom:calc(var(--tab-h) + var(--safe-b) + 12px);left:50%;
@@ -474,7 +503,34 @@ body{
   <div class="tab on" id="tab-manage"   onclick="switchTab('manage')">  <div class="tab-ico">📋</div><div>종목관리</div></div>
   <div class="tab"    id="tab-analysis" onclick="switchTab('analysis')"><div class="tab-ico">📊</div><div>차트분석</div></div>
   <div class="tab"    id="tab-summary"  onclick="switchTab('summary')"> <div class="tab-ico">⚡</div><div>타점요약</div></div>
+  <div class="tab"    id="tab-news"     onclick="switchTab('news')">    <div class="tab-ico">📰</div><div>뉴스·일정</div></div>
   <div class="tab"    id="tab-settings" onclick="switchTab('settings')"><div class="tab-ico">⚙️</div><div>설정</div></div>
+</div>
+
+<!-- ═══ PAGE: 뉴스·일정 ═══ -->
+<div class="pg" id="pg-news">
+  <div style="padding-top:14px;">
+
+    <!-- 종목 선택 -->
+    <div class="seg" style="margin-bottom:14px;">
+      <button class="seg-btn on" id="news-seg-news" onclick="switchNewsSeg('news')">📰 뉴스</button>
+      <button class="seg-btn"    id="news-seg-cal"  onclick="switchNewsSeg('cal')">📅 일정</button>
+    </div>
+
+    <!-- 종목 선택 칩 -->
+    <div class="chip-scroll" id="newsChips" style="margin-bottom:14px;"></div>
+
+    <!-- 뉴스 섹션 -->
+    <div id="newsSection">
+      <div class="empty">종목을 선택하거나 분석을 먼저 실행해주세요</div>
+    </div>
+
+    <!-- 일정 섹션 -->
+    <div id="calSection" style="display:none;">
+      <div class="empty">종목을 선택하거나 분석을 먼저 실행해주세요</div>
+    </div>
+
+  </div>
 </div>
 
 <!-- ═══ PAGE: 설정 ═══ -->
@@ -640,13 +696,6 @@ function logout() {
 // ═══════════════════════════════════════════════
 // TAB / SEG
 // ═══════════════════════════════════════════════
-function switchTab(name) {
-  document.querySelectorAll('.pg').forEach(p=>p.classList.remove('on'));
-  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));
-  document.getElementById('pg-'+name).classList.add('on');
-  document.getElementById('tab-'+name).classList.add('on');
-  if (name==='settings') renderSettingsStatus();
-}
 function switchSeg(seg) {
   activeSeg = seg;
   document.getElementById('seg-holding').classList.toggle('on', seg==='holding');
@@ -1435,8 +1484,202 @@ function renderSummary() {
 }
 
 // ═══════════════════════════════════════════════
-// INIT
+// GEMINI + 뉴스·일정
 // ═══════════════════════════════════════════════
+const GEMINI_KEY = 'AIzaSyDA0G93LrFdTCpRn4w-L8fqpPe6n7FHhQk';
+const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_KEY}`;
+
+let activeNewsTicker = null;
+let activeNewsSeg = 'news';
+
+async function geminiSummarize(text) {
+  const prompt = `다음 영문 기사를 한국어로 2-3문장으로 간결하게 요약해줘. 투자자 관점에서 핵심만. 번역투 없이 자연스럽게:\n\n${text}`;
+  try {
+    const r = await fetch(GEMINI_URL, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({contents:[{parts:[{text:prompt}]}]})
+    });
+    const d = await r.json();
+    return d.candidates?.[0]?.content?.parts?.[0]?.text || null;
+  } catch(e) { return null; }
+}
+
+function switchNewsSeg(seg) {
+  activeNewsSeg = seg;
+  document.getElementById('news-seg-news').classList.toggle('on', seg==='news');
+  document.getElementById('news-seg-cal').classList.toggle('on',  seg==='cal');
+  document.getElementById('newsSection').style.display = seg==='news'?'block':'none';
+  document.getElementById('calSection').style.display  = seg==='cal' ?'block':'none';
+  if (activeNewsTicker) {
+    if (seg==='news') loadNews(activeNewsTicker);
+    else loadCalendar(activeNewsTicker);
+  }
+}
+
+async function switchTab(name) {
+  document.querySelectorAll('.pg').forEach(p=>p.classList.remove('on'));
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));
+  document.getElementById('pg-'+name).classList.add('on');
+  document.getElementById('tab-'+name).classList.add('on');
+  if (name==='settings') renderSettingsStatus();
+  if (name==='news') renderNewsChips();
+}
+
+function renderNewsChips() {
+  const allItems = [...holdings.map(h=>({...h,type:'holding'})),...watchlist.map(h=>({...h,type:'watch'}))];
+  const el = document.getElementById('newsChips');
+  if (!allItems.length) { el.innerHTML=''; return; }
+  el.innerHTML = allItems.map(h => `
+    <div class="chip ${h.ticker===activeNewsTicker?'on':''}"
+      onclick="selectNewsTicker('${h.ticker}')">${h.ticker}</div>
+  `).join('');
+  // 첫 번째 자동 선택
+  if (!activeNewsTicker && allItems.length) selectNewsTicker(allItems[0].ticker);
+}
+
+function selectNewsTicker(ticker) {
+  activeNewsTicker = ticker;
+  renderNewsChips();
+  if (activeNewsSeg==='news') loadNews(ticker);
+  else loadCalendar(ticker);
+}
+
+async function loadNews(ticker) {
+  const el = document.getElementById('newsSection');
+  el.innerHTML = '<div class="news-loading">📰 뉴스 불러오는 중...</div>';
+  try {
+    const d = await fetchJSON(`https://query1.finance.yahoo.com/v1/finance/search?q=${ticker}&lang=en&region=US&newsCount=8&quotesCount=0`);
+    const news = d?.news || [];
+    if (!news.length) { el.innerHTML='<div class="empty">뉴스가 없습니다</div>'; return; }
+
+    // 카드 먼저 표시 (요약 없이)
+    el.innerHTML = news.map((n,i) => `
+      <div class="news-item" onclick="window.open('${n.link}','_blank')" id="news-${i}">
+        <div class="news-title">${n.title}</div>
+        <div class="news-summary" id="summary-${i}" style="color:var(--t4);font-style:italic;">요약 중...</div>
+        <div class="news-meta">
+          <span class="news-src">${n.publisher||''}</span>
+          <span>${n.providerPublishTime ? new Date(n.providerPublishTime*1000).toLocaleDateString('ko-KR') : ''}</span>
+        </div>
+      </div>
+    `).join('');
+
+    // Gemini로 순차 요약
+    for (let i=0; i<Math.min(news.length,5); i++) {
+      const n = news[i];
+      const textToSummarize = n.title + (n.summary ? '. ' + n.summary : '');
+      const summary = await geminiSummarize(textToSummarize);
+      const summaryEl = document.getElementById(`summary-${i}`);
+      if (summaryEl) {
+        summaryEl.textContent = summary || n.title;
+        summaryEl.style.color = 'var(--t3)';
+        summaryEl.style.fontStyle = 'normal';
+      }
+    }
+    // 나머지는 제목으로
+    for (let i=5; i<news.length; i++) {
+      const summaryEl = document.getElementById(`summary-${i}`);
+      if (summaryEl) {
+        summaryEl.textContent = '';
+        summaryEl.style.display = 'none';
+      }
+    }
+  } catch(e) {
+    el.innerHTML = `<div class="empty">뉴스 로드 실패<br><span style="font-size:12px">${e.message}</span></div>`;
+  }
+}
+
+async function loadCalendar(ticker) {
+  const el = document.getElementById('calSection');
+  el.innerHTML = '<div class="news-loading">📅 일정 불러오는 중...</div>';
+  try {
+    // Yahoo Finance 어닝/배당 데이터
+    const [earnings, stats] = await Promise.all([
+      fetchJSON(`https://query1.finance.yahoo.com/v10/finance/quoteSummary/${ticker}?modules=calendarEvents,earningsTrend`),
+      fetchJSON(`https://query1.finance.yahoo.com/v10/finance/quoteSummary/${ticker}?modules=defaultKeyStatistics,summaryDetail`)
+    ]);
+
+    const events = [];
+    const cal = earnings?.quoteSummary?.result?.[0]?.calendarEvents;
+    const detail = stats?.quoteSummary?.result?.[0]?.summaryDetail;
+    const keyStats = stats?.quoteSummary?.result?.[0]?.defaultKeyStatistics;
+
+    // 어닝 발표일
+    if (cal?.earnings?.earningsDate?.length) {
+      cal.earnings.earningsDate.forEach(d => {
+        const date = new Date(d.raw * 1000);
+        events.push({ date, type:'earn', label:'어닝 발표', detail:'실적 발표 예정일' });
+      });
+    }
+
+    // 배당
+    if (detail?.exDividendDate?.raw) {
+      events.push({
+        date: new Date(detail.exDividendDate.raw * 1000),
+        type:'div',
+        label:'배당락일',
+        detail: `배당금 $${detail.dividendRate?.fmt||'—'} · 수익률 ${detail.dividendYield?.fmt||'—'}`
+      });
+    }
+    if (cal?.dividendDate?.raw) {
+      events.push({
+        date: new Date(cal.dividendDate.raw * 1000),
+        type:'div',
+        label:'배당 지급일',
+        detail: `배당금 $${detail?.dividendRate?.fmt||'—'}`
+      });
+    }
+
+    // 주식 분할
+    if (keyStats?.lastSplitDate?.raw) {
+      events.push({
+        date: new Date(keyStats.lastSplitDate.raw * 1000),
+        type:'split',
+        label:'최근 주식 분할',
+        detail: keyStats.lastSplitFactor?.fmt || '—'
+      });
+    }
+
+    if (!events.length) {
+      el.innerHTML = '<div class="empty">예정된 일정이 없습니다</div>';
+      return;
+    }
+
+    events.sort((a,b)=>a.date-b.date);
+    const now = new Date();
+    const upcoming = events.filter(e => e.date >= now);
+    const past     = events.filter(e => e.date < now);
+    const allSorted = [...upcoming, ...past];
+
+    el.innerHTML = allSorted.map(e => {
+      const isPast = e.date < now;
+      const months = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+      return `
+        <div class="cal-item" style="${isPast?'opacity:0.5':''}">
+          <div class="cal-date">
+            <div class="cal-month">${months[e.date.getMonth()]}</div>
+            <div class="cal-day">${e.date.getDate()}</div>
+            <div style="font-size:9px;color:var(--t4);">${e.date.getFullYear()}</div>
+          </div>
+          <div class="cal-info">
+            <div class="cal-type ${e.type}">${
+              e.type==='earn'?'📊 '+e.label:
+              e.type==='div' ?'💰 '+e.label:
+              e.type==='split'?'✂️ '+e.label:'📌 '+e.label
+            } ${isPast?'<span style="font-size:10px;color:var(--t5)">(완료)</span>':''}</div>
+            <div class="cal-detail">${e.detail}</div>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+  } catch(e) {
+    el.innerHTML = `<div class="empty">일정 로드 실패<br><span style="font-size:12px">${e.message}</span></div>`;
+  }
+}
+
+
 (async () => {
   const last = localStorage.getItem('ot_last');
   if (last) {
