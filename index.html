@@ -8,8 +8,6 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>오늘만 타점 분석기</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&family=JetBrains+Mono:wght@400;600;700&display=swap');
 
@@ -565,33 +563,28 @@ let currentTF = '1M';
 let currentUser = null; // { nick, pwHash }
 
 // ═══════════════════════════════════════════════
-// FIREBASE
+// FIREBASE (Realtime DB)
 // ═══════════════════════════════════════════════
 let _db = null;
+const FB_URL = 'https://stock-signal-ea848-default-rtdb.firebaseio.com';
 
-function getFirebaseConfig() {
-  return { projectId: "stock-signal-ea848" };
+async function fbGet(path) {
+  const r = await fetch(`${FB_URL}/${path}.json`);
+  if (!r.ok) throw new Error('FB read error ' + r.status);
+  return r.json();
 }
 
-async function initFirebase() {
-  if (typeof firebase === 'undefined') return false;
-  try {
-    const cfg = {
-      apiKey: "AIzaSyBDnnf1zJbOFnTazw-BtMg5jrlYb80vzxU",
-      authDomain: "stock-signal-ea848.firebaseapp.com",
-      databaseURL: "https://stock-signal-ea848-default-rtdb.firebaseio.com",
-      projectId: "stock-signal-ea848",
-      storageBucket: "stock-signal-ea848.firebasestorage.app",
-      messagingSenderId: "917953854907",
-      appId: "1:917953854907:web:b4b5e10904f707ef92d89e"
-    };
-    if (!firebase.apps.length) firebase.initializeApp(cfg);
-    _db = firebase.database();
-    return true;
-  } catch(e) { console.error('Firebase init error:', e); return false; }
+async function fbSet(path, data) {
+  const r = await fetch(`${FB_URL}/${path}.json`, {
+    method: 'PUT',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(data)
+  });
+  if (!r.ok) throw new Error('FB write error ' + r.status);
+  return r.json();
 }
 
-// 비밀번호 해시 (간단한 SHA-256)
+// 비밀번호 해시
 async function hashPw(pw) {
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(pw));
   return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
@@ -608,37 +601,22 @@ async function doLogin() {
 
   msg.innerHTML='<span style="color:var(--t4)">확인 중...</span>';
 
-  const pwHash = await hashPw(pw);
-  const ok = await initFirebase();
-
-  if (!ok) {
-    // Firebase 미설정 → 로컬 전용 모드
-    currentUser = { nick, pwHash };
-    localStorage.setItem('last_user', JSON.stringify({ nick, pwHash }));
-    holdings  = JSON.parse(localStorage.getItem(`h_${nick}_${pwHash.slice(0,8)}`) || '[]');
-    watchlist = JSON.parse(localStorage.getItem(`w_${nick}_${pwHash.slice(0,8)}`) || '[]');
-    document.getElementById('loginOverlay').classList.add('hidden');
-    renderLists(); switchSeg('holding');
-    updateUserDisplay();
-    toast('로컬 모드로 시작 (Firebase 미설정)');
-    return;
-  }
-
   try {
-    const userRef = _db.ref(`users/${nick}`);
-    const snap = await userRef.get();
+    const pwHash = await hashPw(pw);
+    const existing = await fbGet(`users/${nick}`);
 
-    if (snap.exists()) {
-      const data = snap.val();
-      if (data.pwHash !== pwHash) {
+    if (existing) {
+      // 기존 유저 — 비번 확인
+      if (existing.pwHash !== pwHash) {
         msg.innerHTML='<span style="color:var(--red2)">비밀번호가 틀렸습니다</span>';
         return;
       }
-      holdings  = data.holdings  || [];
-      watchlist = data.watchlist || [];
-      toast('✅ 로그인 완료! 종목 불러옴');
+      holdings  = existing.holdings  || [];
+      watchlist = existing.watchlist || [];
+      toast('✅ 로그인 완료!');
     } else {
-      await userRef.set({ pwHash, holdings:[], watchlist:[] });
+      // 신규 유저 — 계정 생성
+      await fbSet(`users/${nick}`, { pwHash, holdings:[], watchlist:[] });
       holdings = []; watchlist = [];
       toast('✅ 계정 생성 완료!');
     }
@@ -648,6 +626,7 @@ async function doLogin() {
     document.getElementById('loginOverlay').classList.add('hidden');
     renderLists(); switchSeg('holding');
     updateUserDisplay();
+
   } catch(e) {
     msg.innerHTML=`<span style="color:var(--red2)">오류: ${e.message}</span>`;
   }
@@ -668,15 +647,12 @@ function updateUserDisplay() {
 async function save() {
   if (!currentUser) return;
   const { nick, pwHash } = currentUser;
-
   // 로컬 백업
   localStorage.setItem(`h_${nick}_${pwHash.slice(0,8)}`, JSON.stringify(holdings));
   localStorage.setItem(`w_${nick}_${pwHash.slice(0,8)}`, JSON.stringify(watchlist));
-
-  // Firebase
-  if (!_db) return;
+  // Firebase REST 저장
   try {
-    await _db.ref(`users/${nick}`).set({ pwHash, holdings, watchlist });
+    await fbSet(`users/${nick}`, { pwHash, holdings, watchlist });
   } catch(e) { console.warn('Firebase 저장 실패', e); }
 }
 
@@ -1503,26 +1479,24 @@ function renderSummary() {
 // INIT
 // ═══════════════════════════════════════════════
 (async () => {
-  await initFirebase();
-  // 자동 로그인 시도 (이전 세션)
   const last = localStorage.getItem('last_user');
   if (last) {
     try {
       const { nick, pwHash } = JSON.parse(last);
-      if (_db) {
-        const snap = await _db.ref(`users/${nick}`).get();
-        if (snap.exists() && snap.val().pwHash === pwHash) {
-          const data = snap.val();
-          holdings  = data.holdings  || [];
-          watchlist = data.watchlist || [];
-          currentUser = { nick, pwHash };
-          document.getElementById('loginOverlay').classList.add('hidden');
-          renderLists(); switchSeg('holding');
-          updateUserDisplay();
-          return;
-        }
-      } else {
-        // 로컬 모드 자동 로그인
+      // Firebase REST로 자동 로그인 시도
+      const existing = await fbGet(`users/${nick}`);
+      if (existing && existing.pwHash === pwHash) {
+        holdings  = existing.holdings  || [];
+        watchlist = existing.watchlist || [];
+        currentUser = { nick, pwHash };
+        document.getElementById('loginOverlay').classList.add('hidden');
+        renderLists(); switchSeg('holding');
+        updateUserDisplay();
+        return;
+      }
+    } catch(e) {
+      // 네트워크 실패 시 로컬에서 복원
+      try {
         const { nick, pwHash } = JSON.parse(last);
         holdings  = JSON.parse(localStorage.getItem(`h_${nick}_${pwHash.slice(0,8)}`) || '[]');
         watchlist = JSON.parse(localStorage.getItem(`w_${nick}_${pwHash.slice(0,8)}`) || '[]');
@@ -1530,11 +1504,11 @@ function renderSummary() {
         document.getElementById('loginOverlay').classList.add('hidden');
         renderLists(); switchSeg('holding');
         updateUserDisplay();
+        toast('오프라인 모드 · 로컬 데이터 사용');
         return;
-      }
-    } catch(e) {}
+      } catch(e2) {}
+    }
   }
-  // 로그인 화면 표시
   document.getElementById('loginOverlay').classList.remove('hidden');
 })();
 </script>
