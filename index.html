@@ -1410,10 +1410,6 @@ function renderSummary() {
       else if(r.action==='BUY'){det=`<div class="irow"><span class="il">매수 진입가</span><span class="iv g">$${r.buyTgt?.toFixed(2)||'—'}</span></div><div class="irow"><span class="il">목표가</span><span class="iv g">$${r.buyGoal?.toFixed(2)||'—'}</span></div><div class="irow"><span class="il">손절가</span><span class="iv r">$${r.buyStop?.toFixed(2)||'—'}</span></div>`;}
       else if(r.action==='HOLD'){det=`<div class="irow"><span class="il">상태</span><span class="iv b">홀드 유지</span></div><div class="irow"><span class="il">손절가</span><span class="iv r">$${r.sellStop?.toFixed(2)||'—'}</span></div>`;}
       else{det=`<div class="irow"><span class="il">대기가</span><span class="iv y">$${(r.buyTgt||r.sellTgt)?.toFixed(2)||'—'}</span></div>`;}
-
-      else if(r.action==='BUY'){det=`<div class="irow"><span class="il">진입 추천가</span><span class="iv g">$${r.buyTgt?.toFixed(2)||'—'}</span></div><div class="irow"><span class="il">목표가</span><span class="iv g">$${r.sellTgt?.toFixed(2)||'—'}</span></div><div class="irow"><span class="il">손절가</span><span class="iv r">$${r.stopLoss?.toFixed(2)||'—'}</span></div>`;}
-      else if(r.action==='HOLD'){det=`<div class="irow"><span class="il">손절가</span><span class="iv r">$${r.stopLoss?.toFixed(2)||'—'}</span></div>`;}
-      else{det=`<div class="irow"><span class="il">대기가</span><span class="iv b">$${(r.buyTgt||r.sellTgt)?.toFixed(2)||'—'}</span></div>`;}
       return `<div class="sum-item" onclick="selectAnalysis('${h.ticker}')">
         <div class="sum-hdr">
           <div style="display:flex;align-items:center;gap:8px;">
