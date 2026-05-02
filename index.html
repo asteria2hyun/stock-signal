@@ -888,15 +888,39 @@ function resetAll() {
 // ═══════════════════════════════════════════════
 // YAHOO FINANCE
 // ═══════════════════════════════════════════════
-const PROXIES=['https://corsproxy.io/?','https://api.allorigins.win/raw?url='];
+const PROXIES = [
+  'https://corsproxy.io/?',
+  'https://api.allorigins.win/raw?url=',
+  'https://cors-anywhere.herokuapp.com/',
+];
 
 async function fetchJSON(url, pi=0) {
   if (pi>=PROXIES.length) throw new Error('연결 실패');
   try {
-    const r = await fetch(PROXIES[pi]+encodeURIComponent(url),{signal:AbortSignal.timeout(9000)});
+    const r = await fetch(PROXIES[pi]+encodeURIComponent(url), {signal:AbortSignal.timeout(7000)});
     if (!r.ok) throw new Error('HTTP '+r.status);
     return await r.json();
   } catch(e) { return fetchJSON(url, pi+1); }
+}
+
+// quoteSummary 전용 — 여러 프록시+쿼리 시도
+async function fetchSummary(ticker, modules) {
+  const urls = [
+    `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${ticker}?modules=${modules}`,
+    `https://query2.finance.yahoo.com/v10/finance/quoteSummary/${ticker}?modules=${modules}`,
+    `https://query1.finance.yahoo.com/v11/finance/quoteSummary/${ticker}?modules=${modules}`,
+  ];
+  for (const url of urls) {
+    for (let pi=0; pi<2; pi++) {
+      try {
+        const r = await fetch(PROXIES[pi]+encodeURIComponent(url), {signal:AbortSignal.timeout(7000)});
+        if (!r.ok) continue;
+        const d = await r.json();
+        if (d?.quoteSummary?.result?.[0]) return d.quoteSummary.result[0];
+      } catch(e) {}
+    }
+  }
+  return null;
 }
 
 async function fetchQuote(ticker) {
@@ -1041,17 +1065,18 @@ async function fetchHistory(ticker, tf='1M') {
 
 async function fetchAnalyst(ticker) {
   try {
-    const d = await fetchJSON(`https://query1.finance.yahoo.com/v10/finance/quoteSummary/${ticker}?modules=financialData%2CrecommendationTrend`);
-    const fin = d?.quoteSummary?.result?.[0]?.financialData;
-    const rec = d?.quoteSummary?.result?.[0]?.recommendationTrend?.trend?.[0];
+    const result = await fetchSummary(ticker, 'financialData%2CrecommendationTrend');
+    if (!result) return null;
+    const fin = result.financialData;
+    const rec = result.recommendationTrend?.trend?.[0];
     if (!fin) return null;
     return {
       targetMean:   fin.targetMeanPrice?.raw   || null,
       targetHigh:   fin.targetHighPrice?.raw   || null,
       targetLow:    fin.targetLowPrice?.raw    || null,
       targetMedian: fin.targetMedianPrice?.raw || null,
-      recKey:       fin.recommendationKey      || null, // strongBuy, buy, hold, sell, strongSell
-      recMean:      fin.recommendationMean?.raw|| null, // 1=강매수 5=강매도
+      recKey:       fin.recommendationKey      || null,
+      recMean:      fin.recommendationMean?.raw|| null,
       numAnalysts:  fin.numberOfAnalystOpinions?.raw || 0,
       strongBuy:    rec?.strongBuy  || 0,
       buy:          rec?.buy        || 0,
@@ -1620,7 +1645,10 @@ async function geminiAsk(prompt) {
     const r = await fetch(GEMINI_URL, {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({contents:[{parts:[{text:prompt}]}]})
+      body: JSON.stringify({
+        contents:[{parts:[{text:prompt}]}],
+        generationConfig:{temperature:0.3, maxOutputTokens:500}
+      })
     });
     const d = await r.json();
     return d.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || null;
@@ -1628,12 +1656,12 @@ async function geminiAsk(prompt) {
 }
 
 async function geminiTranslateTitle(title) {
-  return await geminiAsk(`다음 영문 주식 기사 제목을 자연스러운 한국어로 번역해줘. 번역문만 출력:\n${title}`);
+  return await geminiAsk(`다음 영문 주식 기사 제목을 한국어로 번역. 번역문만 출력:\n${title}`);
 }
 
 async function geminiSummarize(title, summary) {
   const text = title + (summary ? '. ' + summary : '');
-  return await geminiAsk(`다음 영문 주식 기사를 한국어로 2-3문장으로 간결하게 요약해줘. 투자자 관점에서 핵심만. 번역투 없이 자연스럽게:\n\n${text}`);
+  return await geminiAsk(`다음 영문 주식 기사를 한국어 2문장으로 요약. 요약문만 출력:\n${text}`);
 }
 
 function switchNewsSeg(seg) {
@@ -1696,30 +1724,31 @@ async function loadNews(ticker) {
       </div>
     `).join('');
 
-    // Gemini로 병렬 처리 (제목 번역 + 요약)
+    // Gemini로 병렬 처리
     const promises = news.map(async (n, i) => {
-      let titleKo, summaryKo;
-      if (i < 5) {
-        const result = await geminiAsk(
-          `주식 기사를 분석해줘. 아래 형식으로만 답해:\n제목: [한국어 제목 번역]\n요약: [2-3문장 한국어 요약, 투자자 관점]\n\n원문 제목: ${n.title}\n원문 내용: ${n.summary||n.title}`
-        );
-        if (result) {
-          const titleMatch = result.match(/제목:\s*(.+)/);
-          const summaryMatch = result.match(/요약:\s*([\s\S]+)/);
-          titleKo = titleMatch?.[1]?.trim();
-          summaryKo = summaryMatch?.[1]?.trim();
+      try {
+        if (i < 5) {
+          // 제목 번역 + 요약 병렬
+          const [titleKo, summaryKo] = await Promise.all([
+            geminiTranslateTitle(n.title),
+            geminiSummarize(n.title, n.summary)
+          ]);
+          return { i, titleKo, summaryKo };
+        } else {
+          // 제목 번역만
+          const titleKo = await geminiTranslateTitle(n.title);
+          return { i, titleKo, summaryKo: null };
         }
-      } else {
-        titleKo = await geminiTranslateTitle(n.title);
+      } catch(e) {
+        return { i, titleKo: null, summaryKo: null };
       }
-      return { i, titleKo, summaryKo };
     });
 
     const results = await Promise.all(promises);
     for (const { i, titleKo, summaryKo } of results) {
-      const titleEl = document.getElementById(`title-${i}`);
+      const titleEl   = document.getElementById(`title-${i}`);
       const summaryEl = document.getElementById(`summary-${i}`);
-      if (titleEl && titleKo) titleEl.textContent = titleKo;
+      if (titleEl   && titleKo)   titleEl.textContent = titleKo;
       if (summaryEl) {
         if (summaryKo) {
           summaryEl.textContent = summaryKo;
@@ -1739,13 +1768,7 @@ async function loadCalendar(ticker) {
   const el = document.getElementById('calSection');
   el.innerHTML = '<div class="news-loading">📅 일정 불러오는 중...</div>';
   try {
-    let d = await fetchJSON(`https://query1.finance.yahoo.com/v11/finance/quoteSummary/${ticker}?modules=calendarEvents%2CsummaryDetail%2CdefaultKeyStatistics&crumb=`);
-    // v11 실패 시 v10으로 fallback
-    if (!d?.quoteSummary?.result?.[0]) {
-      d = await fetchJSON(`https://query2.finance.yahoo.com/v10/finance/quoteSummary/${ticker}?modules=calendarEvents%2CsummaryDetail%2CdefaultKeyStatistics`);
-    }
-    const result = d?.quoteSummary?.result?.[0];
-
+    const result = await fetchSummary(ticker, 'calendarEvents%2CsummaryDetail%2CdefaultKeyStatistics');
     if (!result) throw new Error('데이터 없음');
 
     const cal      = result.calendarEvents;
