@@ -888,39 +888,27 @@ function resetAll() {
 // ═══════════════════════════════════════════════
 // YAHOO FINANCE
 // ═══════════════════════════════════════════════
-const PROXIES = [
-  'https://corsproxy.io/?',
-  'https://api.allorigins.win/raw?url=',
-  'https://cors-anywhere.herokuapp.com/',
-];
+// ── API 설정 ──
+const FINNHUB_KEY = 'd7r224hr01qtpsm0p3h0d7r224hr01qtpsm0p3hg';
+const FINNHUB = 'https://finnhub.io/api/v1';
+
+// Yahoo chart용 프록시 (chart API는 아직 작동)
+const PROXIES = ['https://corsproxy.io/?', 'https://api.allorigins.win/raw?url='];
 
 async function fetchJSON(url, pi=0) {
   if (pi>=PROXIES.length) throw new Error('연결 실패');
   try {
-    const r = await fetch(PROXIES[pi]+encodeURIComponent(url), {signal:AbortSignal.timeout(7000)});
+    const r = await fetch(PROXIES[pi]+encodeURIComponent(url), {signal:AbortSignal.timeout(8000)});
     if (!r.ok) throw new Error('HTTP '+r.status);
     return await r.json();
   } catch(e) { return fetchJSON(url, pi+1); }
 }
 
-// quoteSummary 전용 — 여러 프록시+쿼리 시도
-async function fetchSummary(ticker, modules) {
-  const urls = [
-    `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${ticker}?modules=${modules}`,
-    `https://query2.finance.yahoo.com/v10/finance/quoteSummary/${ticker}?modules=${modules}`,
-    `https://query1.finance.yahoo.com/v11/finance/quoteSummary/${ticker}?modules=${modules}`,
-  ];
-  for (const url of urls) {
-    for (let pi=0; pi<2; pi++) {
-      try {
-        const r = await fetch(PROXIES[pi]+encodeURIComponent(url), {signal:AbortSignal.timeout(7000)});
-        if (!r.ok) continue;
-        const d = await r.json();
-        if (d?.quoteSummary?.result?.[0]) return d.quoteSummary.result[0];
-      } catch(e) {}
-    }
-  }
-  return null;
+// Finnhub 직접 호출 (CORS 없음)
+async function finnhub(path) {
+  const r = await fetch(`${FINNHUB}${path}&token=${FINNHUB_KEY}`, {signal:AbortSignal.timeout(8000)});
+  if (!r.ok) throw new Error('Finnhub ' + r.status);
+  return await r.json();
 }
 
 async function fetchQuote(ticker) {
@@ -1065,24 +1053,31 @@ async function fetchHistory(ticker, tf='1M') {
 
 async function fetchAnalyst(ticker) {
   try {
-    const result = await fetchSummary(ticker, 'financialData%2CrecommendationTrend');
-    if (!result) return null;
-    const fin = result.financialData;
-    const rec = result.recommendationTrend?.trend?.[0];
-    if (!fin) return null;
+    const [rec, target] = await Promise.all([
+      finnhub(`/recommendation?symbol=${ticker}`),
+      finnhub(`/stock/price-target?symbol=${ticker}`)
+    ]);
+    const latest = Array.isArray(rec) ? rec[0] : null;
+    const total = latest ? (latest.strongBuy + latest.buy + latest.hold + latest.sell + latest.strongSell) : 0;
+    const recMean = total > 0
+      ? (latest.strongBuy*1 + latest.buy*2 + latest.hold*3 + latest.sell*4 + latest.strongSell*5) / total
+      : null;
+    const recKey = recMean
+      ? recMean <= 1.5 ? 'strongBuy' : recMean <= 2.5 ? 'buy' : recMean <= 3.5 ? 'hold' : recMean <= 4.5 ? 'sell' : 'strongSell'
+      : null;
     return {
-      targetMean:   fin.targetMeanPrice?.raw   || null,
-      targetHigh:   fin.targetHighPrice?.raw   || null,
-      targetLow:    fin.targetLowPrice?.raw    || null,
-      targetMedian: fin.targetMedianPrice?.raw || null,
-      recKey:       fin.recommendationKey      || null,
-      recMean:      fin.recommendationMean?.raw|| null,
-      numAnalysts:  fin.numberOfAnalystOpinions?.raw || 0,
-      strongBuy:    rec?.strongBuy  || 0,
-      buy:          rec?.buy        || 0,
-      hold:         rec?.hold       || 0,
-      sell:         rec?.sell       || 0,
-      strongSell:   rec?.strongSell || 0,
+      targetMean:   target?.targetMean   || null,
+      targetHigh:   target?.targetHigh   || null,
+      targetLow:    target?.targetLow    || null,
+      targetMedian: target?.targetMedian || null,
+      numAnalysts:  target?.numberOfAnalysts || 0,
+      recKey,
+      recMean,
+      strongBuy:  latest?.strongBuy  || 0,
+      buy:        latest?.buy        || 0,
+      hold:       latest?.hold       || 0,
+      sell:       latest?.sell       || 0,
+      strongSell: latest?.strongSell || 0,
     };
   } catch(e) { return null; }
 }
@@ -1768,89 +1763,77 @@ async function loadCalendar(ticker) {
   const el = document.getElementById('calSection');
   el.innerHTML = '<div class="news-loading">📅 일정 불러오는 중...</div>';
   try {
-    const result = await fetchSummary(ticker, 'calendarEvents%2CsummaryDetail%2CdefaultKeyStatistics');
-    if (!result) throw new Error('데이터 없음');
+    // Finnhub: 어닝 캘린더, 배당, 기본정보 병렬 fetch
+    const [earningsData, dividendData, basicData] = await Promise.all([
+      finnhub(`/stock/earnings?symbol=${ticker}`),
+      finnhub(`/stock/dividend2?symbol=${ticker}&from=2024-01-01&to=2027-12-31`),
+      finnhub(`/stock/metric?symbol=${ticker}&metric=all`)
+    ]);
 
-    const cal      = result.calendarEvents;
-    const detail   = result.summaryDetail;
-    const keyStats = result.defaultKeyStatistics;
-    const events   = [];
+    const events = [];
+    const now = new Date();
 
-    // 어닝 발표일
-    const earningDates = cal?.earnings?.earningsDate || [];
-    earningDates.forEach(d => {
-      if (d?.raw) events.push({
-        date: new Date(d.raw * 1000),
-        type: 'earn',
-        label: '어닝 발표',
-        detail: '실적 발표 예정'
-      });
-    });
-
-    // 배당락일
-    if (detail?.exDividendDate?.raw) {
-      events.push({
-        date: new Date(detail.exDividendDate.raw * 1000),
-        type: 'div',
-        label: '배당락일 (Ex-Dividend)',
-        detail: `배당금 $${detail.dividendRate?.fmt||'—'} · 수익률 ${detail.dividendYield?.fmt||'—'}`
+    // 어닝 (최근 4분기 + 예정)
+    if (Array.isArray(earningsData)) {
+      earningsData.slice(0, 6).forEach(e => {
+        if (!e.period) return;
+        const date = new Date(e.period);
+        events.push({
+          date,
+          type: 'earn',
+          label: '어닝 발표',
+          detail: `EPS 실제 ${e.actual!=null?'$'+e.actual:'—'} / 예상 ${e.estimate!=null?'$'+e.estimate:'—'} · ${e.quarter}Q ${e.year}`
+        });
       });
     }
 
-    // 배당 지급일
-    if (cal?.dividendDate?.raw) {
-      events.push({
-        date: new Date(cal.dividendDate.raw * 1000),
-        type: 'div',
-        label: '배당 지급일',
-        detail: `배당금 $${detail?.dividendRate?.fmt||'—'}`
+    // 배당
+    if (Array.isArray(dividendData?.data)) {
+      dividendData.data.slice(0, 6).forEach(d => {
+        if (!d.exDividendDate) return;
+        const date = new Date(d.exDividendDate);
+        events.push({
+          date,
+          type: 'div',
+          label: '배당락일',
+          detail: `배당금 $${d.amount?.toFixed(3)||'—'} · 수익률 ${d.yield?+(d.yield*100).toFixed(2)+'%':'—'}`
+        });
+        if (d.payDate) {
+          events.push({
+            date: new Date(d.payDate),
+            type: 'div',
+            label: '배당 지급일',
+            detail: `배당금 $${d.amount?.toFixed(3)||'—'}`
+          });
+        }
       });
     }
 
-    // 주식 분할
-    if (keyStats?.lastSplitDate?.raw) {
-      events.push({
-        date: new Date(keyStats.lastSplitDate.raw * 1000),
-        type: 'split',
-        label: '주식 분할',
-        detail: `비율 ${keyStats.lastSplitFactor?.fmt||'—'}`
-      });
-    }
-
-    // 52주 고저 + EPS (보조 정보로 상단 표시)
-    const w52High = detail?.fiftyTwoWeekHigh?.fmt;
-    const w52Low  = detail?.fiftyTwoWeekLow?.fmt;
-    const eps     = keyStats?.trailingEps?.fmt;
-    const pe      = detail?.trailingPE?.fmt;
-    const beta    = detail?.beta?.fmt;
-
-    let infoHtml = '';
-    if (w52High || eps) {
-      infoHtml = `
-        <div class="card" style="margin-bottom:14px;padding:12px 14px;">
-          <div style="font-size:11px;font-weight:700;color:var(--t4);letter-spacing:2px;margin-bottom:10px;">KEY STATS</div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-            ${w52High?`<div><div style="font-size:10px;color:var(--t4);">52주 최고</div><div style="font-family:'JetBrains Mono';font-weight:700;color:var(--red2);">$${w52High}</div></div>`:''}
-            ${w52Low ?`<div><div style="font-size:10px;color:var(--t4);">52주 최저</div><div style="font-family:'JetBrains Mono';font-weight:700;color:var(--green);">$${w52Low}</div></div>`:''}
-            ${eps    ?`<div><div style="font-size:10px;color:var(--t4);">EPS (TTM)</div><div style="font-family:'JetBrains Mono';font-weight:700;color:var(--t1);">$${eps}</div></div>`:''}
-            ${pe     ?`<div><div style="font-size:10px;color:var(--t4);">P/E (TTM)</div><div style="font-family:'JetBrains Mono';font-weight:700;color:var(--t1);">${pe}</div></div>`:''}
-            ${beta   ?`<div><div style="font-size:10px;color:var(--t4);">베타</div><div style="font-family:'JetBrains Mono';font-weight:700;color:var(--t1);">${beta}</div></div>`:''}
-          </div>
+    // Key Stats
+    const m = basicData?.metric || {};
+    const infoHtml = (m['52WeekHigh'] || m.epsBasicExclExtraItemsTTM) ? `
+      <div class="card" style="margin-bottom:14px;padding:12px 14px;">
+        <div style="font-size:11px;font-weight:700;color:var(--t4);letter-spacing:2px;margin-bottom:10px;">KEY STATS</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          ${m['52WeekHigh']?`<div><div style="font-size:10px;color:var(--t4);">52주 최고</div><div style="font-family:'JetBrains Mono';font-weight:700;color:var(--red2);">$${m['52WeekHigh']?.toFixed(2)}</div></div>`:''}
+          ${m['52WeekLow'] ?`<div><div style="font-size:10px;color:var(--t4);">52주 최저</div><div style="font-family:'JetBrains Mono';font-weight:700;color:var(--green);">$${m['52WeekLow']?.toFixed(2)}</div></div>`:''}
+          ${m.epsBasicExclExtraItemsTTM?`<div><div style="font-size:10px;color:var(--t4);">EPS (TTM)</div><div style="font-family:'JetBrains Mono';font-weight:700;color:var(--t1);">$${m.epsBasicExclExtraItemsTTM?.toFixed(2)}</div></div>`:''}
+          ${m.peBasicExclExtraTTM?`<div><div style="font-size:10px;color:var(--t4);">P/E (TTM)</div><div style="font-family:'JetBrains Mono';font-weight:700;color:var(--t1);">${m.peBasicExclExtraTTM?.toFixed(1)}</div></div>`:''}
+          ${m.beta?`<div><div style="font-size:10px;color:var(--t4);">베타</div><div style="font-family:'JetBrains Mono';font-weight:700;color:var(--t1);">${m.beta?.toFixed(2)}</div></div>`:''}
+          ${m.dividendYieldIndicatedAnnual?`<div><div style="font-size:10px;color:var(--t4);">배당 수익률</div><div style="font-family:'JetBrains Mono';font-weight:700;color:var(--green);">${(m.dividendYieldIndicatedAnnual).toFixed(2)}%</div></div>`:''}
         </div>
-      `;
-    }
+      </div>` : '';
 
     if (!events.length) {
       el.innerHTML = infoHtml + '<div class="empty">예정된 일정이 없습니다</div>';
       return;
     }
 
-    const now = new Date();
     events.sort((a,b) => {
       const aUp = a.date >= now, bUp = b.date >= now;
       if (aUp && !bUp) return -1;
       if (!aUp && bUp) return 1;
-      return a.date - b.date;
+      return aUp ? a.date - b.date : b.date - a.date;
     });
 
     const months = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
@@ -1870,8 +1853,7 @@ async function loadCalendar(ticker) {
             </div>
             <div class="cal-detail">${e.detail}</div>
           </div>
-        </div>
-      `;
+        </div>`;
     }).join('');
 
   } catch(e) {
