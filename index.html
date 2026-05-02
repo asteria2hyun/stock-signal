@@ -8,6 +8,11 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>매매 타점</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script type="module">
+  import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
+  import { getDatabase, ref, set, get } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js';
+  window._fbModules = { initializeApp, getDatabase, ref, set, get };
+</script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&family=JetBrains+Mono:wght@400;600;700&display=swap');
 
@@ -358,7 +363,43 @@ body{
 .btn-cancel{flex:1;background:var(--card2);border:1px solid var(--border2);border-radius:10px;padding:13px;font-size:14px;font-weight:600;color:var(--t3);cursor:pointer;}
 .btn-confirm{flex:2;background:var(--green);color:#000;border:none;border-radius:10px;padding:13px;font-size:14px;font-weight:700;cursor:pointer;}
 
-/* ── EMPTY / DISCLAIMER ── */
+/* ── LOGIN OVERLAY ── */
+.login-overlay {
+  position: fixed; inset: 0; z-index: 1000;
+  background: var(--bg);
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  padding: 32px 24px;
+}
+.login-overlay.hidden { display: none; }
+.login-logo {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 28px; font-weight: 700;
+  color: var(--green); letter-spacing: 2px;
+  margin-bottom: 8px;
+  text-shadow: 0 0 20px rgba(0,209,122,0.3);
+}
+.login-sub { font-size: 13px; color: var(--t4); margin-bottom: 40px; letter-spacing: 1px; }
+.login-form { width: 100%; max-width: 340px; display: flex; flex-direction: column; gap: 12px; }
+.login-inp {
+  width: 100%; background: var(--card); border: 1.5px solid var(--border2);
+  border-radius: 12px; color: var(--t1);
+  font-family: 'Noto Sans KR', sans-serif; font-size: 15px;
+  padding: 14px 16px; outline: none; transition: border-color .2s;
+}
+.login-inp:focus { border-color: var(--green); }
+.login-inp::placeholder { color: var(--t5); }
+.login-btn {
+  width: 100%; background: var(--green); color: #000; border: none;
+  border-radius: 12px; padding: 15px; font-size: 16px; font-weight: 700;
+  cursor: pointer; transition: all .15s; margin-top: 4px;
+}
+.login-btn:active { transform: scale(.97); }
+.login-msg { font-size: 12px; text-align: center; margin-top: 8px; min-height: 18px; }
+.login-notice {
+  font-size: 11px; color: var(--t5); text-align: center;
+  margin-top: 24px; line-height: 1.7; max-width: 300px;
+}
 .empty{text-align:center;padding:40px 20px;color:var(--t4);font-size:14px;line-height:1.8;}
 .disc{font-size:10px;color:var(--t5);line-height:1.7;padding:14px;text-align:center;border-top:1px solid var(--border);margin-top:8px;}
 
@@ -379,9 +420,10 @@ body{
 <div class="hdr">
   <div>
     <div class="hdr-logo">📈 타점 분석기</div>
-    <div class="hdr-sub">순수 기술적 분석 · Yahoo Finance</div>
+    <div class="hdr-sub" id="userDisplay">로그인 필요</div>
   </div>
   <div class="hdr-right">
+    <button class="icon-btn" onclick="logout()" title="로그아웃" style="font-size:13px;">↩</button>
     <button class="icon-btn" id="refreshBtn" onclick="runAll()" title="새로고침">↻</button>
   </div>
 </div>
@@ -403,32 +445,10 @@ body{
       <input class="inp qt" id="inQty" type="number" placeholder="수량" min="1">
       <button class="btn-add" onclick="searchAdd()">+</button>
     </div>
-    <div id="qtyHint" style="font-size:11px;color:var(--t4);margin-bottom:10px;padding-left:2px;">
+    <div id="qtyHint" style="font-size:11px;color:var(--t4);margin-bottom:12px;padding-left:2px;">
       보유 수량 입력 (선택) · 나중에 수정 가능
     </div>
   </div>
-
-  <!-- 스크린샷 (접기/펼치기) -->
-  <div style="margin-bottom:12px;">
-    <button onclick="toggleUploadZone()"
-      style="width:100%;background:var(--card2);border:1px solid var(--border2);border-radius:10px;
-             padding:10px 14px;color:var(--t3);font-size:13px;font-weight:600;cursor:pointer;
-             display:flex;align-items:center;justify-content:space-between;">
-      <span>📸 스크린샷으로 보유 종목 불러오기</span>
-      <span id="uploadToggleIcon" style="color:var(--t4);">▼</span>
-    </button>
-    <div id="uploadZoneWrap" style="display:none;margin-top:8px;">
-      <div class="upload-zone" id="uploadZone" onclick="document.getElementById('fileInput').click()">
-        <div class="upload-ico">📸</div>
-        <div class="upload-txt">잔고 스크린샷 업로드</div>
-        <div class="upload-sub">기존 보유 종목은 교체 · 관심 종목은 유지</div>
-      </div>
-      <div style="font-size:11px;color:var(--t4);padding:6px 4px;line-height:1.6;">
-        ⚠️ 스크린샷 업로드 시 기존 <b style="color:var(--t3);">보유 종목 전체가 교체</b>됩니다.<br>관심 종목은 그대로 유지됩니다.
-      </div>
-    </div>
-  </div>
-  <input type="file" id="fileInput" accept="image/*" onchange="handleImage(event)">
 
   <!-- 종목 리스트 -->
   <div id="holdingList"></div>
@@ -464,67 +484,69 @@ body{
 <div class="pg" id="pg-settings">
   <div style="padding-top:14px;">
 
-    <div class="sec">Anthropic API 키</div>
+    <div class="sec">Firebase 설정 (영구 저장)</div>
     <div class="card" style="margin-bottom:10px;">
       <div style="font-size:13px;color:var(--t3);line-height:1.7;margin-bottom:14px;">
-        스크린샷 AI 인식에 필요합니다.<br>
-        <span style="color:var(--t4);font-size:12px;">키는 이 기기에만 저장되며 외부로 전송되지 않습니다.</span>
+        Firebase를 연결하면 쿠키 삭제 후에도 종목이 유지됩니다.<br>
+        <span style="font-size:11px;color:var(--t4);">각자 닉네임+비밀번호로 완전히 분리 저장됩니다.</span>
       </div>
-      <div style="position:relative;margin-bottom:10px;">
-        <input id="apiKeyInp" type="password"
-          style="width:100%;background:var(--bg2);border:1.5px solid var(--border2);border-radius:10px;color:var(--t1);font-family:'JetBrains Mono',monospace;font-size:13px;padding:11px 44px 11px 14px;outline:none;letter-spacing:1px;"
-          placeholder="sk-ant-api03-...">
-        <button onclick="toggleApiVis()" id="apiVisBtn"
-          style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;color:var(--t4);font-size:16px;cursor:pointer;">👁</button>
-      </div>
-      <div style="display:flex;gap:8px;">
-        <button onclick="saveApiKey()"
-          style="flex:2;background:var(--green);color:#000;border:none;border-radius:10px;padding:12px;font-size:14px;font-weight:700;cursor:pointer;">저장</button>
-        <button onclick="clearApiKey()"
-          style="flex:1;background:var(--card2);border:1px solid var(--border2);border-radius:10px;padding:12px;font-size:13px;font-weight:600;color:var(--t4);cursor:pointer;">삭제</button>
-      </div>
-      <div id="apiStatus" style="margin-top:10px;font-size:12px;text-align:center;"></div>
+      <textarea id="fbConfigInp" rows="5"
+        style="width:100%;background:var(--bg2);border:1.5px solid var(--border2);border-radius:10px;color:var(--t1);font-family:'JetBrains Mono',monospace;font-size:11px;padding:12px;outline:none;resize:none;line-height:1.6;"
+        placeholder='Firebase 설정 JSON 붙여넣기&#10;{&#10;  "apiKey": "...",&#10;  "databaseURL": "...",&#10;  "projectId": "..."&#10;}'></textarea>
+      <button onclick="saveFBConfig()"
+        style="width:100%;background:var(--green);color:#000;border:none;border-radius:10px;padding:12px;font-size:14px;font-weight:700;cursor:pointer;margin-top:8px;">저장</button>
+      <div id="fbStatus" style="margin-top:10px;font-size:12px;text-align:center;"></div>
     </div>
 
-    <div class="sec">API 키 발급 방법</div>
-    <div class="card">
-      <div style="font-size:13px;color:var(--t3);line-height:2;">
-        1. <a href="https://console.anthropic.com" target="_blank" style="color:var(--blue);">console.anthropic.com</a> 접속<br>
-        2. 회원가입 / 로그인<br>
-        3. 좌측 <b style="color:var(--t2);">API Keys</b> 메뉴<br>
-        4. <b style="color:var(--t2);">Create Key</b> → 복사<br>
-        5. 위 입력창에 붙여넣기 후 저장
+    <div class="card" style="margin-bottom:10px;">
+      <div style="font-size:12px;color:var(--t3);line-height:2;">
+        <b style="color:var(--t2);">Firebase 설정 방법</b><br>
+        1. <span style="color:var(--blue);">console.firebase.google.com</span> 접속<br>
+        2. 프로젝트 추가 → 이름 입력 → 생성<br>
+        3. 빌드 → Realtime Database → 데이터베이스 만들기<br>
+        &nbsp;&nbsp;&nbsp;→ 테스트 모드로 시작<br>
+        4. 프로젝트 설정 → 내 앱 → 웹앱 추가(&#60;/&#62;)<br>
+        5. firebaseConfig 전체 복사 → 위에 붙여넣기
       </div>
-      <div style="margin-top:10px;padding:10px;background:var(--bg2);border-radius:8px;font-size:11px;color:var(--t4);line-height:1.7;">
-        💡 신규 가입 시 무료 크레딧 제공<br>
-        스크린샷 1회 인식 약 $0.003 (매우 저렴)
+    </div>
+
+    <div class="sec">계정</div>
+    <div class="card" style="margin-bottom:10px;">
+      <div style="font-size:13px;color:var(--t3);margin-bottom:12px;">
+        현재: <span id="currentUserLabel" style="color:var(--t1);font-weight:700;">—</span>
       </div>
+      <button onclick="logout()"
+        style="width:100%;background:var(--card2);border:1px solid var(--border2);border-radius:10px;padding:12px;font-size:14px;font-weight:600;color:var(--t3);cursor:pointer;">
+        로그아웃
+      </button>
     </div>
 
     <div class="sec">데이터 초기화</div>
     <div class="card">
-      <div style="font-size:13px;color:var(--t3);margin-bottom:12px;">저장된 모든 종목 데이터를 삭제합니다.</div>
+      <div style="font-size:13px;color:var(--t3);margin-bottom:12px;">저장된 모든 종목을 삭제합니다.</div>
       <button onclick="resetAll()"
         style="width:100%;background:rgba(255,61,90,0.1);border:1px solid var(--red);border-radius:10px;padding:12px;font-size:14px;font-weight:700;color:var(--red);cursor:pointer;">
         전체 초기화
       </button>
     </div>
 
-    <div class="disc">버전 3.0 · 순수 기술적 분석 · Yahoo Finance 실시간</div>
+    <div class="disc">버전 4.0 · 순수 기술적 분석 · Yahoo Finance 실시간</div>
   </div>
 </div>
 
-<!-- AI PARSE MODAL -->
-<div class="overlay" id="parseOverlay" onclick="closeModal(event)">
-  <div class="modal" id="parseModal">
-    <div class="modal-title">📸 스크린샷 인식 결과</div>
-    <div class="modal-sub" style="color:var(--red2);">확인 시 기존 보유 종목이 아래 목록으로 교체됩니다</div>
-    <div style="font-size:11px;color:var(--t4);margin-bottom:12px;">관심 종목은 유지됩니다 ✓</div>
-    <div id="parseList"></div>
-    <div class="modal-footer">
-      <button class="btn-cancel" onclick="closeOverlay()">취소</button>
-      <button class="btn-confirm" onclick="confirmParse()">보유 종목 교체</button>
-    </div>
+<!-- LOGIN OVERLAY -->
+<div class="login-overlay" id="loginOverlay">
+  <div class="login-logo">📈 타점 분석기</div>
+  <div class="login-sub">로그인하여 내 종목을 관리하세요</div>
+  <div class="login-form">
+    <input class="login-inp" id="loginNick" type="text" placeholder="닉네임" autocomplete="off" autocorrect="off" spellcheck="false" maxlength="20">
+    <input class="login-inp" id="loginPw"   type="password" placeholder="비밀번호" maxlength="30">
+    <button class="login-btn" onclick="doLogin()">시작하기</button>
+    <div class="login-msg" id="loginMsg"></div>
+  </div>
+  <div class="login-notice">
+    처음이면 자동으로 계정이 만들어집니다<br>
+    닉네임 + 비밀번호로 어디서든 내 종목 복원
   </div>
 </div>
 
@@ -534,18 +556,139 @@ body{
 // ═══════════════════════════════════════════════
 // STATE
 // ═══════════════════════════════════════════════
-let holdings = JSON.parse(localStorage.getItem('v3_holdings') || '[]');
-let watchlist = JSON.parse(localStorage.getItem('v3_watch') || '[]');
+let holdings = [];
+let watchlist = [];
 let cache = {};
 let activeSeg = 'holding';
 let activeAnalysis = null;
 let chartInst = null;
 let currentTF = '1M';
-let parsedItems = [];
+let currentUser = null; // { nick, pwHash }
 
-function save() {
-  localStorage.setItem('v3_holdings', JSON.stringify(holdings));
-  localStorage.setItem('v3_watch',    JSON.stringify(watchlist));
+// ═══════════════════════════════════════════════
+// FIREBASE
+// ═══════════════════════════════════════════════
+let _db = null;
+
+function getFirebaseConfig() {
+  const cfg = localStorage.getItem('fb_config');
+  return cfg ? JSON.parse(cfg) : null;
+}
+
+async function initFirebase() {
+  const cfg = getFirebaseConfig();
+  if (!cfg || !window._fbModules) return false;
+  try {
+    const { initializeApp, getDatabase } = window._fbModules;
+    const app = initializeApp(cfg, cfg.projectId);
+    _db = getDatabase(app);
+    return true;
+  } catch(e) { return false; }
+}
+
+// 비밀번호 해시 (간단한 SHA-256)
+async function hashPw(pw) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(pw));
+  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+
+// ── 로그인 ──
+async function doLogin() {
+  const nick = document.getElementById('loginNick').value.trim();
+  const pw   = document.getElementById('loginPw').value;
+  const msg  = document.getElementById('loginMsg');
+
+  if (!nick) { msg.innerHTML='<span style="color:var(--red2)">닉네임을 입력해주세요</span>'; return; }
+  if (!pw)   { msg.innerHTML='<span style="color:var(--red2)">비밀번호를 입력해주세요</span>'; return; }
+
+  msg.innerHTML='<span style="color:var(--t4)">확인 중...</span>';
+
+  const pwHash = await hashPw(pw);
+  const ok = await initFirebase();
+
+  if (!ok) {
+    // Firebase 미설정 → 로컬 전용 모드
+    currentUser = { nick, pwHash };
+    localStorage.setItem('last_user', JSON.stringify({ nick, pwHash }));
+    holdings  = JSON.parse(localStorage.getItem(`h_${nick}_${pwHash.slice(0,8)}`) || '[]');
+    watchlist = JSON.parse(localStorage.getItem(`w_${nick}_${pwHash.slice(0,8)}`) || '[]');
+    document.getElementById('loginOverlay').classList.add('hidden');
+    renderLists(); switchSeg('holding');
+    updateUserDisplay();
+    toast('로컬 모드로 시작 (Firebase 미설정)');
+    return;
+  }
+
+  try {
+    const { ref, get, set } = window._fbModules;
+    const userRef = ref(_db, `users/${nick}`);
+    const snap = await get(userRef);
+
+    if (snap.exists()) {
+      // 기존 유저 — 비번 확인
+      const data = snap.val();
+      if (data.pwHash !== pwHash) {
+        msg.innerHTML='<span style="color:var(--red2)">비밀번호가 틀렸습니다</span>';
+        return;
+      }
+      holdings  = data.holdings  || [];
+      watchlist = data.watchlist || [];
+      toast('✅ 로그인 완료! 종목 불러옴');
+    } else {
+      // 신규 유저 — 계정 생성
+      await set(userRef, { pwHash, holdings:[], watchlist:[] });
+      holdings = []; watchlist = [];
+      toast('✅ 계정 생성 완료!');
+    }
+
+    currentUser = { nick, pwHash };
+    localStorage.setItem('last_user', JSON.stringify({ nick, pwHash }));
+    document.getElementById('loginOverlay').classList.add('hidden');
+    renderLists(); switchSeg('holding');
+    updateUserDisplay();
+  } catch(e) {
+    msg.innerHTML=`<span style="color:var(--red2)">오류: ${e.message}</span>`;
+  }
+}
+
+// 로그인 입력창 엔터 지원
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('loginNick')?.addEventListener('keydown', e=>{ if(e.key==='Enter') document.getElementById('loginPw').focus(); });
+  document.getElementById('loginPw')?.addEventListener('keydown',   e=>{ if(e.key==='Enter') doLogin(); });
+});
+
+function updateUserDisplay() {
+  const el = document.getElementById('userDisplay');
+  if (el && currentUser) el.textContent = '👤 ' + currentUser.nick;
+}
+
+// ── 저장 ──
+async function save() {
+  if (!currentUser) return;
+  const { nick, pwHash } = currentUser;
+
+  // 로컬 백업
+  localStorage.setItem(`h_${nick}_${pwHash.slice(0,8)}`, JSON.stringify(holdings));
+  localStorage.setItem(`w_${nick}_${pwHash.slice(0,8)}`, JSON.stringify(watchlist));
+
+  // Firebase
+  if (!_db) return;
+  try {
+    const { ref, set } = window._fbModules;
+    await set(ref(_db, `users/${nick}`), { pwHash, holdings, watchlist });
+  } catch(e) { console.warn('Firebase 저장 실패', e); }
+}
+
+function logout() {
+  if (!confirm('로그아웃 하시겠어요?')) return;
+  currentUser = null;
+  localStorage.removeItem('last_user');
+  holdings = []; watchlist = []; cache = {};
+  document.getElementById('loginNick').value = '';
+  document.getElementById('loginPw').value = '';
+  document.getElementById('loginMsg').innerHTML = '';
+  document.getElementById('loginOverlay').classList.remove('hidden');
+  toast('로그아웃됨');
 }
 
 // ═══════════════════════════════════════════════
@@ -556,7 +699,7 @@ function switchTab(name) {
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));
   document.getElementById('pg-'+name).classList.add('on');
   document.getElementById('tab-'+name).classList.add('on');
-  if (name==='settings') renderApiStatus();
+  if (name==='settings') renderSettingsStatus();
 }
 function switchSeg(seg) {
   activeSeg = seg;
@@ -674,92 +817,32 @@ function removeItem(type, i) {
 }
 
 // ═══════════════════════════════════════════════
-// IMAGE UPLOAD → CLAUDE AI PARSE
+// SETTINGS
 // ═══════════════════════════════════════════════
-function toggleUploadZone() {
-  const wrap = document.getElementById('uploadZoneWrap');
-  const icon = document.getElementById('uploadToggleIcon');
-  const isOpen = wrap.style.display !== 'none';
-  wrap.style.display = isOpen ? 'none' : 'block';
-  icon.textContent = isOpen ? '▼' : '▲';
-}
-
-const uploadZone = document.getElementById('uploadZone');
-uploadZone.addEventListener('dragover', e=>{e.preventDefault();uploadZone.classList.add('drag');});
-uploadZone.addEventListener('dragleave', ()=>uploadZone.classList.remove('drag'));
-uploadZone.addEventListener('drop', e=>{e.preventDefault();uploadZone.classList.remove('drag');const f=e.dataTransfer.files[0];if(f)processImageFile(f);});
-
-async function handleImage(e) {
-  const f = e.target.files[0];
-  if (!f) return;
-  await processImageFile(f);
-  e.target.value='';
-}
-
-async function processImageFile(file) {
-  uploadZone.innerHTML = '<div class="upload-ico">⏳</div><div class="upload-txt">AI 분석 중...</div><div class="upload-sub">종목을 인식하고 있어요</div>';
-  document.getElementById('prog').classList.add('on');
+function saveFBConfig() {
+  const raw = document.getElementById('fbConfigInp').value.trim();
   try {
-    const b64 = await fileToBase64(file);
-    const mediaType = file.type || 'image/jpeg';
-    const result = await callClaudeVision(b64, mediaType);
-    parsedItems = result.map(item=>({...item, checked:true}));
-    showParseModal();
+    // firebaseConfig 객체 또는 JSON 모두 허용
+    const clean = raw.replace(/^const\s+\w+\s*=\s*/, '').replace(/;$/, '').trim();
+    const cfg = JSON.parse(clean);
+    if (!cfg.apiKey || !cfg.projectId) throw new Error('apiKey, projectId 필수');
+    localStorage.setItem('fb_config', JSON.stringify(cfg));
+    renderSettingsStatus();
+    toast('✅ Firebase 설정 저장됨. 다시 로그인해주세요');
   } catch(e) {
-    toast('인식 실패: '+e.message);
-  } finally {
-    document.getElementById('prog').classList.remove('on');
-    uploadZone.innerHTML = '<div class="upload-ico">📸</div><div class="upload-txt">잔고 스크린샷 업로드</div><div class="upload-sub">AI가 종목·수량 자동 추출</div>';
+    toast('❌ JSON 형식 오류: ' + e.message);
   }
 }
 
-function fileToBase64(file) {
-  return new Promise((res,rej)=>{
-    const r=new FileReader();
-    r.onload=()=>res(r.result.split(',')[1]);
-    r.onerror=()=>rej(new Error('파일 읽기 실패'));
-    r.readAsDataURL(file);
-  });
-}
-
-// ═══════════════════════════════════════════════
-// API KEY MANAGEMENT
-// ═══════════════════════════════════════════════
-function getApiKey() { return localStorage.getItem('anthropic_key') || ''; }
-
-function saveApiKey() {
-  const key = document.getElementById('apiKeyInp').value.trim();
-  if (!key) { toast('API 키를 입력해주세요'); return; }
-  if (!key.startsWith('sk-ant')) { toast('⚠️ 올바른 API 키 형식이 아닙니다'); return; }
-  localStorage.setItem('anthropic_key', key);
-  renderApiStatus();
-  toast('✅ API 키 저장됨');
-}
-
-function clearApiKey() {
-  if (!confirm('API 키를 삭제할까요?')) return;
-  localStorage.removeItem('anthropic_key');
-  document.getElementById('apiKeyInp').value = '';
-  renderApiStatus();
-  toast('API 키 삭제됨');
-}
-
-function toggleApiVis() {
-  const inp = document.getElementById('apiKeyInp');
-  inp.type = inp.type==='password' ? 'text' : 'password';
-}
-
-function renderApiStatus() {
-  const key = getApiKey();
-  const el = document.getElementById('apiStatus');
-  if (!el) return;
-  if (key) {
-    const masked = key.slice(0,10)+'...'+key.slice(-4);
-    el.innerHTML = `<span style="color:var(--green);">✅ 저장됨: ${masked}</span>`;
-    document.getElementById('apiKeyInp').value = key;
-  } else {
-    el.innerHTML = `<span style="color:var(--t4);">API 키 없음 · 스크린샷 인식 불가</span>`;
-  }
+function renderSettingsStatus() {
+  const cfg = getFirebaseConfig();
+  const fbEl = document.getElementById('fbStatus');
+  const userEl = document.getElementById('currentUserLabel');
+  if (fbEl) fbEl.innerHTML = cfg
+    ? `<span style="color:var(--green)">✅ 연결됨: ${cfg.projectId}</span>`
+    : `<span style="color:var(--t4)">미설정 · 로컬 저장 모드</span>`;
+  if (fbEl && cfg) document.getElementById('fbConfigInp').value = JSON.stringify(cfg, null, 2);
+  if (userEl) userEl.textContent = currentUser ? currentUser.nick : '—';
 }
 
 function resetAll() {
@@ -769,94 +852,6 @@ function resetAll() {
   toast('초기화 완료');
 }
 
-async function callClaudeVision(b64, mediaType) {
-  const apiKey = getApiKey();
-  if (!apiKey) throw new Error('API 키 없음. ⚙️ 설정 탭에서 먼저 입력해주세요');
-
-  const prompt = `이 이미지는 주식 잔고 화면입니다.
-이미지에서 모든 주식 종목을 찾아서 아래 JSON 형식으로만 응답하세요. 다른 말은 하지 마세요.
-
-[
-  {"ticker": "AAPL", "qty": 10, "type": "holding"},
-  {"ticker": "TSLA", "qty": 5, "type": "holding"}
-]
-
-규칙:
-- ticker: 미국 주식 티커 코드 (영문 대문자)
-- qty: 보유 수량 (숫자, 없으면 0)
-- type: 항상 "holding"
-- 수량이 안보이면 0으로
-- JSON 배열만 응답, 설명 없음`;
-
-  const resp = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true',
-    },
-    body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 1000,
-      messages: [{
-        role: 'user',
-        content: [
-          { type: 'image', source: { type: 'base64', media_type: mediaType, data: b64 } },
-          { type: 'text', text: prompt }
-        ]
-      }]
-    })
-  });
-
-  if (resp.status===401) throw new Error('API 키가 올바르지 않습니다. 설정에서 확인해주세요');
-  if (!resp.ok) throw new Error('API 오류 ' + resp.status);
-  const data = await resp.json();
-  const text = data.content?.find(c=>c.type==='text')?.text || '[]';
-  const clean = text.replace(/```json|```/g,'').trim();
-  return JSON.parse(clean);
-}
-
-// ═══════════════════════════════════════════════
-// PARSE MODAL
-// ═══════════════════════════════════════════════
-function showParseModal() {
-  if (!parsedItems.length) { toast('인식된 종목이 없습니다'); return; }
-  const el = document.getElementById('parseList');
-  el.innerHTML = parsedItems.map((item,i)=>`
-    <div class="parse-item">
-      <div class="parse-tk">${item.ticker}</div>
-      <div class="parse-qty">${item.qty?item.qty+'주':''}</div>
-      <span class="parse-type h">보유</span>
-      <button class="parse-check on" id="pc-${i}" onclick="toggleParse(${i})">✓</button>
-    </div>
-  `).join('');
-  document.getElementById('parseOverlay').classList.add('on');
-}
-
-function toggleParse(i) {
-  parsedItems[i].checked = !parsedItems[i].checked;
-  const btn = document.getElementById('pc-'+i);
-  btn.classList.toggle('on', parsedItems[i].checked);
-  btn.textContent = parsedItems[i].checked ? '✓' : '';
-}
-
-function confirmParse() {
-  const selected = parsedItems.filter(p=>p.checked);
-  if (!selected.length) { toast('선택된 종목이 없습니다'); closeOverlay(); return; }
-  // 보유 종목 전체 교체 (관심 종목은 절대 건드리지 않음)
-  holdings = selected.map(p => ({
-    ticker: p.ticker,
-    qty: p.qty || 0
-  }));
-  save(); renderLists();
-  closeOverlay();
-  switchSeg('holding');
-  toast(`✅ 보유 종목 ${selected.length}개로 업데이트됨`);
-}
-
-function closeOverlay() { document.getElementById('parseOverlay').classList.remove('on'); }
-function closeModal(e) { if(e.target===document.getElementById('parseOverlay')) closeOverlay(); }
 
 // ═══════════════════════════════════════════════
 // YAHOO FINANCE
@@ -1026,61 +1021,46 @@ function analyze(data, qty, quote, mode) {
   // ── 결정 ────────────────────────────────────
   const maxS=20;
   const pctBull=Math.min(100,Math.max(0,(adjustedScore+maxS/2)/maxS*100));
-  let action,sellQty=0,sellTgt=null,stopLoss=null,buyTgt=null,note='';
 
+  // 항상 매도·매수 타점 둘 다 계산
+  // 매수 타점
+  const buyTgt  = adjustedScore >= 0
+    ? price                                              // 강세면 현재가 진입
+    : Math.max(price*(1-atrV*2/price), srV.sup);        // 약세면 지지선 or ATR 하단
+  const buyGoal = buyTgt * (1 + Math.min(0.07, atrV/price*3));
+  const buyStop = buyTgt * (1 - atrV*2/buyTgt);
+
+  // 매도 타점
+  const sellQtyStrong = qty ? Math.max(1,Math.round(qty*0.5)) : 0;
+  const sellQtyWeak   = qty ? Math.max(1,Math.round(qty*0.25)): 0;
+  const sellTgt = adjustedScore <= -3.5
+    ? price*(1+0.005)
+    : adjustedScore <= -1.5
+    ? price*(1+0.008)
+    : Math.min(price*(1+Math.min(0.06,atrV/price*2.5)), srV.res*0.99);
+  const sellQty = adjustedScore <= -3.5 ? sellQtyStrong : sellQtyWeak;
+  const sellStop = price*(1-atrV*2/price);
+
+  // 추천 방향 결정
+  let action, recommend, note='';
   if (mode === 'sell') {
-    // 보유중: 매도 타점 중심
-    if (adjustedScore<=-3.5) {
-      action='SELL';
-      sellQty=qty?Math.max(1,Math.round(qty*0.5)):0;
-      sellTgt=price*(1+0.005);
-      stopLoss=price*(1-atrV*2/price);
-      note=`강한 매도 신호. ${sellQty}주(50%) 매도 권장`;
-    } else if (adjustedScore<=-1.5) {
-      action='SELL';
-      sellQty=qty?Math.max(1,Math.round(qty*0.25)):0;
-      sellTgt=price*(1+0.008);
-      stopLoss=price*(1-atrV*2/price);
-      note=`부분 매도. ${sellQty}주(25%) 이익 실현`;
-    } else if (adjustedScore>=3) {
-      action='HOLD'; // 강하게 오르고 있으면 홀드
-      buyTgt=price;
-      stopLoss=price*(1-atrV*1.5/price);
-      note='추세 강세. 추가 매도 보류, 홀드 권장';
-    } else {
-      action='WAIT';
-      stopLoss=price*(1-atrV*1.5/price);
-      note='명확한 신호 없음. 관망 유지';
-    }
+    if      (adjustedScore<=-3.5){ action='SELL'; recommend='sell'; note='강한 매도 신호 · 매도 추천'; }
+    else if (adjustedScore<=-1.5){ action='SELL'; recommend='sell'; note='부분 매도 신호 · 매도 추천'; }
+    else if (adjustedScore>=3)   { action='HOLD'; recommend='hold'; note='추세 강세 · 홀드 추천'; }
+    else                         { action='WAIT'; recommend='hold'; note='신호 불분명 · 관망 유지'; }
   } else {
-    // 관심종목: 매수 타점 중심
-    if (adjustedScore>=4.5) {
-      action='BUY';
-      buyTgt=price;
-      sellTgt=price*(1+Math.min(0.07,atrV/price*3));
-      stopLoss=price*(1-atrV*2/price);
-      note='강한 매수 타점. 현재가 진입 추천';
-    } else if (adjustedScore>=2) {
-      action='BUY';
-      buyTgt=price*0.99;
-      sellTgt=price*(1+Math.min(0.04,atrV/price*2));
-      stopLoss=price*(1-atrV*1.8/price);
-      note='매수 타점 형성 중. 소량 진입 가능';
-    } else if (adjustedScore<=-2) {
-      action='WAIT';
-      buyTgt=price*(1-atrV*2/price); // 더 빠지면 진입
-      stopLoss=null;
-      note='아직 하락 중. 지지선 확인 후 진입';
-    } else {
-      action='WAIT';
-      buyTgt=price*0.97;
-      stopLoss=null;
-      note='신호 불분명. 관망 후 눌림목 대기';
-    }
+    if      (adjustedScore>=4.5) { action='BUY';  recommend='buy';  note='강한 매수 타점 · 매수 추천'; }
+    else if (adjustedScore>=2)   { action='BUY';  recommend='buy';  note='매수 타점 형성 · 소량 진입 가능'; }
+    else if (adjustedScore<=-2)  { action='WAIT'; recommend='wait'; note='하락 중 · 지지선 확인 후 진입'; }
+    else                         { action='WAIT'; recommend='wait'; note='신호 불분명 · 눌림목 대기'; }
   }
 
-  return {action,score:adjustedScore,rawScore:score,pctBull,sigs,mode,
-    sellQty,sellTgt,stopLoss,buyTgt,note,
+  return {action,recommend,score:adjustedScore,rawScore:score,pctBull,sigs,mode,note,
+    // 매도 정보
+    sellTgt,sellQty,sellStop,
+    // 매수 정보
+    buyTgt,buyGoal,buyStop,
+    // 공통
     rsiV,bbL,bbA,srV,fibV,atrV,
     lma20,lma50,lma200,ma20,ma50,e9,
     ml,ms,stK,stD,volR,price,
@@ -1157,37 +1137,43 @@ function renderAnalysis(ticker) {
   }).join('');
 
   const modeLabel = type==='holding'?'📦 보유':'👁 관심';
-  const actionLabel = r.action==='BUY'?'🟢 매수 타점':r.action==='SELL'?'🔴 매도 타점':r.action==='HOLD'?'🔵 홀드':'🟡 관망';
   const barColor = r.pctBull>60?'var(--green)':r.pctBull<40?'var(--red)':'var(--yellow)';
 
-  // Action rows
-  let actRows='';
-  if (r.action==='SELL') {
-    const pct=h?.qty?Math.round(r.sellQty/h.qty*100):0;
-    actRows=`
-      <div class="irow"><span class="il">매도 예약가</span><span class="iv o">$${r.sellTgt?.toFixed(2)||'—'}</span></div>
-      <div class="irow"><span class="il">권장 매도 수량</span><span class="iv r">${r.sellQty}주 (${pct}%)</span></div>
-      <div class="irow"><span class="il">매도 후 잔여</span><span class="iv">${(h?.qty||0)-r.sellQty}주</span></div>
-      <div class="irow"><span class="il">손절 기준가</span><span class="iv r">$${r.stopLoss?.toFixed(2)||'—'}</span></div>
-    `;
-  } else if (r.action==='BUY') {
-    actRows=`
-      <div class="irow"><span class="il">진입 추천가</span><span class="iv g">$${r.buyTgt?.toFixed(2)||'—'}</span></div>
-      <div class="irow"><span class="il">1차 목표가</span><span class="iv g">$${r.sellTgt?.toFixed(2)||'—'}</span></div>
-      <div class="irow"><span class="il">손절 기준가</span><span class="iv r">$${r.stopLoss?.toFixed(2)||'—'}</span></div>
-    `;
-  } else if (r.action==='HOLD') {
-    actRows=`
-      <div class="irow"><span class="il">현재 상태</span><span class="iv b">홀드 유지</span></div>
-      <div class="irow"><span class="il">손절 기준가</span><span class="iv r">$${r.stopLoss?.toFixed(2)||'—'}</span></div>
-    `;
-  } else {
-    actRows=`
-      <div class="irow"><span class="il">현재 상태</span><span class="iv y">관망</span></div>
-      <div class="irow"><span class="il">${type==='holding'?'추가매도 대기가':'매수 대기가'}</span><span class="iv b">$${r.buyTgt?.toFixed(2)||r.sellTgt?.toFixed(2)||'—'}</span></div>
-      ${r.stopLoss?`<div class="irow"><span class="il">손절 기준가</span><span class="iv r">$${r.stopLoss.toFixed(2)}</span></div>`:''}
-    `;
-  }
+  // 추천 방향 라벨
+  const recLabel = r.recommend==='sell'?'🔴 매도 추천'
+    : r.recommend==='buy' ?'🟢 매수 추천'
+    : r.recommend==='hold'?'🔵 홀드 추천'
+    : '🟡 관망';
+  const heroClass = r.recommend==='sell'?'SELL'
+    : r.recommend==='buy'?'BUY'
+    : r.recommend==='hold'?'HOLD':'WAIT';
+
+  // 매도 타점 섹션
+  const pct = h?.qty ? Math.round(r.sellQty/h.qty*100) : 0;
+  const sellRows = `
+    <div class="irow">
+      <span class="il">매도 타점</span>
+      <span class="iv o">$${r.sellTgt?.toFixed(2)||'—'}
+        ${r.recommend==='sell'?'<span style="font-size:10px;background:rgba(255,61,90,.2);color:var(--red2);padding:1px 6px;border-radius:4px;margin-left:4px;">추천</span>':''}
+      </span>
+    </div>
+    ${type==='holding' && r.sellQty ? `
+    <div class="irow"><span class="il">권장 매도 수량</span><span class="iv r">${r.sellQty}주 (${pct}%)</span></div>
+    <div class="irow"><span class="il">매도 후 잔여</span><span class="iv">${(h?.qty||0)-r.sellQty}주</span></div>` : ''}
+    <div class="irow"><span class="il">매도 손절가</span><span class="iv r">$${r.sellStop?.toFixed(2)||'—'}</span></div>
+  `;
+
+  // 매수 타점 섹션
+  const buyRows = `
+    <div class="irow">
+      <span class="il">매수 진입가</span>
+      <span class="iv g">$${r.buyTgt?.toFixed(2)||'—'}
+        ${r.recommend==='buy'?'<span style="font-size:10px;background:rgba(0,209,122,.2);color:var(--green2);padding:1px 6px;border-radius:4px;margin-left:4px;">추천</span>':''}
+      </span>
+    </div>
+    <div class="irow"><span class="il">매수 목표가</span><span class="iv g">$${r.buyGoal?.toFixed(2)||'—'}</span></div>
+    <div class="irow"><span class="il">매수 손절가</span><span class="iv r">$${r.buyStop?.toFixed(2)||'—'}</span></div>
+  `;
 
   const pillsHTML=r.sigs.map(s=>`<span class="pill ${s.d>0?'b':s.d<0?'r':'n'}">${s.n} ${s.v}</span>`).join('');
   const indHTML=`<div class="itbl">${r.sigs.map(s=>`
@@ -1206,15 +1192,18 @@ function renderAnalysis(ticker) {
     </div>
     ${q?`<div style="font-size:13px;color:${q.chg>=0?'var(--green)':'var(--red)'};margin-bottom:14px;">${q.chg>=0?'+':''}${q.chg.toFixed(2)} (${q.chgPct.toFixed(1)}%) 전일대비</div>`:'<div style="margin-bottom:14px;"></div>'}
 
-    <div class="hero ${r.action}">
-      <div class="hero-act">${actionLabel}</div>
+    <div class="hero ${heroClass}">
+      <div class="hero-act">${recLabel}</div>
       <div class="hero-sub">${r.note}</div>
-      <div class="hero-sub" style="margin-top:4px;">점수 ${r.score>0?'+':''}${r.score.toFixed(1)} · 매수 강도 ${r.pctBull.toFixed(0)}%</div>
+      <div class="hero-sub" style="margin-top:4px;">종합 점수 ${r.score>0?'+':''}${r.score.toFixed(1)} · 매수 강도 ${r.pctBull.toFixed(0)}%</div>
       <div class="str-bar"><div class="str-fill" style="width:${r.pctBull}%;background:${barColor};"></div></div>
     </div>
 
-    <div class="sec">오늘의 타점</div>
-    <div class="itbl">${actRows}</div>
+    <div class="sec">🔴 매도 타점</div>
+    <div class="itbl">${sellRows}</div>
+
+    <div class="sec">🟢 매수 타점</div>
+    <div class="itbl">${buyRows}</div>
 
     <div class="sec">차트</div>
     <div class="chart-card">
@@ -1371,8 +1360,42 @@ function renderSummary() {
 // ═══════════════════════════════════════════════
 // INIT
 // ═══════════════════════════════════════════════
-renderLists();
-switchSeg('holding');
+(async () => {
+  await initFirebase();
+  // 자동 로그인 시도 (이전 세션)
+  const last = localStorage.getItem('last_user');
+  if (last) {
+    try {
+      const { nick, pwHash } = JSON.parse(last);
+      if (_db) {
+        const { ref, get } = window._fbModules;
+        const snap = await get(ref(_db, `users/${nick}`));
+        if (snap.exists() && snap.val().pwHash === pwHash) {
+          const data = snap.val();
+          holdings  = data.holdings  || [];
+          watchlist = data.watchlist || [];
+          currentUser = { nick, pwHash };
+          document.getElementById('loginOverlay').classList.add('hidden');
+          renderLists(); switchSeg('holding');
+          updateUserDisplay();
+          return;
+        }
+      } else {
+        // 로컬 모드 자동 로그인
+        const { nick, pwHash } = JSON.parse(last);
+        holdings  = JSON.parse(localStorage.getItem(`h_${nick}_${pwHash.slice(0,8)}`) || '[]');
+        watchlist = JSON.parse(localStorage.getItem(`w_${nick}_${pwHash.slice(0,8)}`) || '[]');
+        currentUser = { nick, pwHash };
+        document.getElementById('loginOverlay').classList.add('hidden');
+        renderLists(); switchSeg('holding');
+        updateUserDisplay();
+        return;
+      }
+    } catch(e) {}
+  }
+  // 로그인 화면 표시
+  document.getElementById('loginOverlay').classList.remove('hidden');
+})();
 </script>
 </body>
 </html>
