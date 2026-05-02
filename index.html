@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -440,8 +439,10 @@ body{
 
   <!-- 추가 입력 영역 -->
   <div id="addArea">
-    <div class="inp-row" style="margin-bottom:8px;">
-      <input class="inp tk" id="searchInp" placeholder="종목코드 입력 (예: NVDA)" autocomplete="off" autocorrect="off" spellcheck="false">
+    <div class="inp-row" style="margin-bottom:8px;" id="searchWrap">
+      <input class="inp tk" id="searchInp" placeholder="종목코드 또는 한글 검색" autocomplete="off" autocorrect="off" spellcheck="false"
+        oninput="handleSearchInput(event)"
+        onblur="setTimeout(hideSuggestions,200)">
       <input class="inp qt" id="inQty" type="number" placeholder="수량" min="1">
       <button class="btn-add" onclick="searchAdd()">+</button>
     </div>
@@ -710,7 +711,7 @@ function switchSeg(seg) {
   // 관심 종목이면 수량 입력 숨김
   document.getElementById('inQty').style.display       = seg==='holding'?'':'none';
   document.getElementById('qtyHint').style.display     = seg==='holding'?'':'none';
-  document.getElementById('searchInp').placeholder     = seg==='holding'?'종목코드 입력 (예: NVDA)':'관심 종목 코드 입력 (예: TSLA)';
+  document.getElementById('searchInp').placeholder     = seg==='holding'?'종목코드 또는 한글 검색':'관심 종목 검색';
   renderLists();
 }
 
@@ -793,7 +794,10 @@ function editQty(ticker, i) {
 // ADD / REMOVE
 // ═══════════════════════════════════════════════
 function searchAdd() {
-  const t = document.getElementById('searchInp').value.trim().toUpperCase();
+  const raw = document.getElementById('searchInp').value.trim();
+  const isKorean = /[ㄱ-ㅎ|ㅏ-ㅣ|가-힣]/.test(raw);
+  if (isKorean) { toast('검색 결과에서 종목을 선택해주세요'); return; }
+  const t = raw.toUpperCase();
   const q = activeSeg==='holding' ? (parseInt(document.getElementById('inQty').value)||0) : 0;
   if (!t) { toast('종목코드를 입력해주세요'); return; }
   const list = activeSeg==='holding' ? holdings : watchlist;
@@ -802,6 +806,7 @@ function searchAdd() {
   save(); renderLists();
   document.getElementById('searchInp').value='';
   document.getElementById('inQty').value='';
+  hideSuggestions();
   toast(t+' 추가됨');
 }
 document.getElementById('searchInp').addEventListener('keydown', e=>{ if(e.key==='Enter') searchAdd(); });
@@ -869,18 +874,127 @@ async function fetchJSON(url, pi=0) {
 
 async function fetchQuote(ticker) {
   try {
-    const d = await fetchJSON(`https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=1d`);
+    // 5일치 가져와서 전일 종가를 실제 데이터에서 추출
+    const d = await fetchJSON(`https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=5d`);
     const r=d?.chart?.result?.[0]; if(!r) return null;
     const m=r.meta;
+    const ts=r.timestamps||r.timestamp||[];
+    const closes=r.indicators?.quote?.[0]?.close||[];
+
+    // 유효한 종가들만 추출
+    const validCloses = closes.filter(c=>c&&c>0);
+    const price  = m.regularMarketPrice || validCloses[validCloses.length-1] || 0;
+    // 전일 종가: meta의 previousClose 우선, 없으면 히스토리 두번째 마지막값
+    const prev   = (m.previousClose && m.previousClose > 0)
+      ? m.previousClose
+      : (validCloses.length >= 2 ? validCloses[validCloses.length-2] : price);
+
+    // 이상값 검증 (등락률 50% 초과면 데이터 오류)
+    const chg    = price - prev;
+    const chgPct = prev > 0 ? chg/prev*100 : 0;
+    const isValid = Math.abs(chgPct) < 50;
+
     return {
-      price:  m.regularMarketPrice||m.previousClose||0,
-      prev:   m.previousClose||0,
-      chg:    (m.regularMarketPrice||0)-(m.previousClose||0),
-      chgPct: ((m.regularMarketPrice||0)-(m.previousClose||0))/(m.previousClose||1)*100,
+      price,
+      prev,
+      chg:    isValid ? chg : 0,
+      chgPct: isValid ? chgPct : 0,
       name:   m.shortName||m.symbol||ticker,
+      valid:  isValid,
     };
   } catch(e){ return null; }
 }
+
+// ── 한글/영문 종목 검색 ──
+const TICKER_MAP = {
+  // 한글 → 티커
+  '애플':['AAPL'],'마이크로소프트':['MSFT'],'엔비디아':['NVDA'],'구글':['GOOGL','GOOG'],
+  '알파벳':['GOOGL'],'아마존':['AMZN'],'메타':['META'],'테슬라':['TSLA'],
+  '넷플릭스':['NFLX'],'AMD':['AMD'],'인텔':['INTC'],'퀄컴':['QCOM'],
+  '마이크론':['MU'],'브로드컴':['AVGO'],'TSMC':['TSM'],'암':['ARM'],
+  '팔란티어':['PLTR'],'코인베이스':['COIN'],'로빈후드':['HOOD'],
+  '소파이':['SOFI'],'루멘텀':['LITE'],'샌디스크':['SNDK'],
+  '크리도':['CRDO'],'어플라이드':['AMAT'],'어플라이드머티리얼즈':['AMAT'],
+  'SPY':['SPY'],'QQQ':['QQQ'],'나스닥':['QQQ','QQQM'],'S&P':['SPY'],
+  '반도체':['SOXL','SOXX'],'인텔':['INTC'],'삼성전자':['005930.KS'],
+};
+
+let searchTimeout = null;
+let searchResults = [];
+
+async function handleSearchInput(e) {
+  const val = document.getElementById('searchInp').value.trim();
+  clearTimeout(searchTimeout);
+  hideSuggestions();
+  if (!val) return;
+
+  // 한글 입력 감지
+  const isKorean = /[ㄱ-ㅎ|ㅏ-ㅣ|가-힣]/.test(val);
+
+  if (isKorean) {
+    // 로컬 매핑 먼저
+    const matches = Object.entries(TICKER_MAP)
+      .filter(([k]) => k.includes(val))
+      .flatMap(([k,v]) => v.map(t=>({ticker:t, name:k})));
+
+    if (matches.length) { showSuggestions(matches); return; }
+
+    // Yahoo Finance 검색 API
+    searchTimeout = setTimeout(async () => {
+      try {
+        const d = await fetchJSON(`https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(val)}&lang=ko&region=KR&quotesCount=6&newsCount=0`);
+        const quotes = d?.quotes?.filter(q=>q.quoteType==='EQUITY'&&q.symbol) || [];
+        const results = quotes.map(q=>({ticker:q.symbol, name:q.shortname||q.longname||q.symbol}));
+        showSuggestions(results);
+      } catch(e){}
+    }, 400);
+  } else if (val.length >= 1) {
+    // 영문 티커 — Yahoo 자동완성
+    searchTimeout = setTimeout(async () => {
+      try {
+        const d = await fetchJSON(`https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(val)}&lang=en&region=US&quotesCount=6&newsCount=0`);
+        const quotes = d?.quotes?.filter(q=>q.quoteType==='EQUITY'&&q.symbol) || [];
+        const results = quotes.map(q=>({ticker:q.symbol, name:q.shortname||q.longname||q.symbol}));
+        showSuggestions(results);
+      } catch(e){}
+    }, 300);
+  }
+}
+
+function showSuggestions(results) {
+  searchResults = results;
+  let box = document.getElementById('searchSuggest');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'searchSuggest';
+    box.style.cssText = `position:absolute;left:0;right:0;top:100%;background:var(--card2);border:1px solid var(--border2);border-radius:0 0 10px 10px;z-index:50;max-height:220px;overflow-y:auto;`;
+    document.getElementById('searchWrap').style.position='relative';
+    document.getElementById('searchWrap').appendChild(box);
+  }
+  if (!results.length) { box.innerHTML='<div style="padding:12px 14px;font-size:13px;color:var(--t4);">검색 결과 없음</div>'; return; }
+  box.innerHTML = results.map((r,i) => `
+    <div onclick="selectSuggestion(${i})"
+      style="padding:11px 14px;border-bottom:1px solid var(--border);cursor:pointer;display:flex;align-items:center;gap:10px;"
+      onmouseover="this.style.background='var(--border)'" onmouseout="this.style.background=''">
+      <span style="font-family:'JetBrains Mono';font-weight:700;color:var(--t1);font-size:14px;min-width:60px;">${r.ticker}</span>
+      <span style="font-size:12px;color:var(--t3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${r.name}</span>
+    </div>
+  `).join('');
+}
+
+function selectSuggestion(i) {
+  const r = searchResults[i];
+  document.getElementById('searchInp').value = r.ticker;
+  hideSuggestions();
+  if (activeSeg==='holding') document.getElementById('inQty').focus();
+  else searchAdd();
+}
+
+function hideSuggestions() {
+  const box = document.getElementById('searchSuggest');
+  if (box) box.remove();
+}
+
 
 async function fetchHistory(ticker, tf='1M') {
   const rng={1:'1mo','1M':'1mo','3M':'3mo','6M':'6mo'}[tf]||'1mo';
