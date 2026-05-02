@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -572,15 +573,22 @@ let currentUser = null; // { nick, pwHash }
 let _db = null;
 
 function getFirebaseConfig() {
-  const cfg = localStorage.getItem('fb_config');
-  return cfg ? JSON.parse(cfg) : null;
+  return { projectId: "stock-signal-ea848" };
 }
 
 async function initFirebase() {
-  const cfg = getFirebaseConfig();
-  if (!cfg || !window._fbModules) return false;
+  if (!window._fbModules) return false;
   try {
     const { initializeApp, getDatabase } = window._fbModules;
+    const cfg = {
+      apiKey: "AIzaSyBDnnf1zJbOFnTazw-BtMg5jrlYb80vzxU",
+      authDomain: "stock-signal-ea848.firebaseapp.com",
+      databaseURL: "https://stock-signal-ea848-default-rtdb.firebaseio.com",
+      projectId: "stock-signal-ea848",
+      storageBucket: "stock-signal-ea848.firebasestorage.app",
+      messagingSenderId: "917953854907",
+      appId: "1:917953854907:web:b4b5e10904f707ef92d89e"
+    };
     const app = initializeApp(cfg, cfg.projectId);
     _db = getDatabase(app);
     return true;
