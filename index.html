@@ -1525,14 +1525,19 @@ function renderChart(data, r) {
   const canvas=document.getElementById('mainChart');
   if (!canvas) return;
   if (chartInst) { chartInst.destroy(); chartInst=null; }
-  const labels=data.map(d=>d.date.slice(5));
+  if (!data || !data.length) return;
+
+  // bbA가 캐시에 없을 경우 재계산
   const closes=data.map(d=>d.close);
-  const bbU=r.bbA.map(b=>b?b.u:null),bbL2=r.bbA.map(b=>b?b.l:null),bbM=r.bbA.map(b=>b?b.m:null);
+  const bbArr = r.bbA && r.bbA.length === closes.length ? r.bbA : bb(closes);
+
+  const labels=data.map(d=>d.date.slice(5));
+  const bbU=bbArr.map(b=>b?b.u:null),bbL2=bbArr.map(b=>b?b.l:null),bbM=bbArr.map(b=>b?b.m:null);
   const buyM=new Array(closes.length).fill(null);
   const selM=new Array(closes.length).fill(null);
   for(let i=14;i<closes.length-1;i++){
     const rv=rsi(closes.slice(Math.max(0,i-29),i+1));
-    const b=r.bbA[i];
+    const b=bbArr[i];
     if(rv<35&&b&&closes[i]<b.l)buyM[i]=closes[i];
     if(rv>68&&b&&closes[i]>b.u)selM[i]=closes[i];
   }
@@ -1907,13 +1912,47 @@ async function loadCalendar(ticker) {
 
     // Key Stats + 배당 정보
     const m = basicData?.metric || {};
-    if (m.dividendPerShareAnnual) {
-      events.push({
-        date: new Date(),
-        type: 'div',
-        label: '배당 정보',
-        detail: `연간 배당금 $${m.dividendPerShareAnnual?.toFixed(3)||'—'} · 수익률 ${m.dividendYieldIndicatedAnnual?.toFixed(2)||'—'}%`
-      });
+
+    // Yahoo Finance에서 배당락일 정확한 날짜/시간 가져오기
+    try {
+      const yUrl = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${ticker}?modules=summaryDetail%2CcalendarEvents`;
+      const yData = await fetchJSON(yUrl);
+      const detail = yData?.quoteSummary?.result?.[0]?.summaryDetail;
+      const cal    = yData?.quoteSummary?.result?.[0]?.calendarEvents;
+
+      if (detail?.exDividendDate?.raw) {
+        const exDate = new Date(detail.exDividendDate.raw * 1000);
+        const koTime = exDate.toLocaleString('ko-KR', {
+          timeZone: 'Asia/Seoul',
+          year:'numeric', month:'2-digit', day:'2-digit',
+          hour:'2-digit', minute:'2-digit', hour12:false
+        });
+        events.push({
+          date: exDate,
+          type: 'div',
+          label: '배당락일 (Ex-Dividend)',
+          detail: `${koTime} (한국시간) · 배당금 $${detail.dividendRate?.fmt||'—'} · 수익률 ${detail.dividendYield?.fmt||'—'}`
+        });
+      }
+      if (cal?.dividendDate?.raw) {
+        const payDate = new Date(cal.dividendDate.raw * 1000);
+        events.push({
+          date: payDate,
+          type: 'div',
+          label: '배당 지급일',
+          detail: `배당금 $${detail?.dividendRate?.fmt||'—'}`
+        });
+      }
+    } catch(e) {
+      // Yahoo 실패 시 metric에서 연간 배당 정보만 표시
+      if (m.dividendPerShareAnnual) {
+        events.push({
+          date: new Date(),
+          type: 'div',
+          label: '배당 정보',
+          detail: `연간 배당금 $${m.dividendPerShareAnnual?.toFixed(3)||'—'} · 수익률 ${m.dividendYieldIndicatedAnnual?.toFixed(2)||'—'}%`
+        });
+      }
     }
 
     const infoHtml = (m['52WeekHigh'] || m.epsBasicExclExtraItemsTTM) ? `
