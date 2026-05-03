@@ -1098,7 +1098,35 @@ function atrArr(data,p=14){const tr=data.map((d,i)=>i===0?d.high-d.low:Math.max(
 function atr(data,p=14){const a=atrArr(data,p);return a[a.length-1]||0;}
 function sr(data,n=20){const sl=data.slice(-n);return{res:Math.max(...sl.map(d=>d.high)),sup:Math.min(...sl.map(d=>d.low)),piv:(Math.max(...sl.map(d=>d.high))+Math.min(...sl.map(d=>d.low))+data[data.length-1].close)/3};}
 function fib(data,n=60){const sl=data.slice(-n);const hi=Math.max(...sl.map(d=>d.high)),lo=Math.min(...sl.map(d=>d.low)),df=hi-lo;return{r236:hi-df*.236,r382:hi-df*.382,r500:hi-df*.5,r618:hi-df*.618,hi,lo};}
-function adx(data,p=14){if(data.length<p*2)return{adx:0,pdi:0,mdi:0};const trs=[],pdms=[],mdms=[];for(let i=1;i<data.length;i++){const h=data[i].high,l=data[i].low,ph=data[i-1].high,pl=data[i-1].low,pc=data[i-1].close;trs.push(Math.max(h-l,Math.abs(h-pc),Math.abs(l-pc)));pdms.push(h-ph>pl-l&&h-ph>0?h-ph:0);mdms.push(pl-l>h-ph&&pl-l>0?pl-l:0);}const atrV=sma(trs,p),pdi14=sma(pdms,p),mdi14=sma(mdms,p);const n2=atrV.length-1;const at=atrV[n2]||1,pd=pdi14[n2]||0,md=mdi14[n2]||0;const pdiV=pd/at*100,mdiV=md/at*100;const dxArr=atrV.map((_,i)=>{const at2=atrV[i]||1,pd2=pdi14[i]||0,md2=mdi14[i]||0;const p2=pd2/at2*100,m2=md2/at2*100;return Math.abs(p2-m2)/(p2+m2||1)*100;});const adxA=sma(dxArr.filter(v=>v!=null),p);return{adx:adxA[adxA.length-1]||0,pdi:pdiV,mdi:mdiV};}
+function adx(data,p=14){
+  if(data.length<p+1)return{adx:0,pdi:0,mdi:0};
+  const trs=[],pdms=[],mdms=[];
+  for(let i=1;i<data.length;i++){
+    const h=data[i].high,l=data[i].low,ph=data[i-1].high,pl=data[i-1].low,pc=data[i-1].close;
+    trs.push(Math.max(h-l,Math.abs(h-pc),Math.abs(l-pc)));
+    pdms.push(h-ph>pl-l&&h-ph>0?h-ph:0);
+    mdms.push(pl-l>h-ph&&pl-l>0?pl-l:0);
+  }
+  // Wilder 스무딩 (단순 SMA 대신 지수 평활)
+  const smoothed=(arr,p)=>{
+    if(arr.length<p)return[arr.reduce((s,v)=>s+v,0)/arr.length||0];
+    let s=arr.slice(0,p).reduce((a,v)=>a+v,0);
+    const r=[s];
+    for(let i=p;i<arr.length;i++){s=s-s/p+arr[i];r.push(s);}
+    return r;
+  };
+  const aTR=smoothed(trs,p),aPDM=smoothed(pdms,p),aMDM=smoothed(mdms,p);
+  const n2=aTR.length-1;
+  const at=aTR[n2]||1,pd=aPDM[n2]||0,md=aMDM[n2]||0;
+  const pdiV=pd/at*100,mdiV=md/at*100;
+  const dxArr=aTR.map((_,i)=>{
+    const at2=aTR[i]||1,pd2=aPDM[i]||0,md2=aMDM[i]||0;
+    const p2=pd2/at2*100,m2=md2/at2*100;
+    return Math.abs(p2-m2)/(p2+m2||1)*100;
+  });
+  const adxSmooth=smoothed(dxArr,p);
+  return{adx:adxSmooth[adxSmooth.length-1]||0,pdi:pdiV,mdi:mdiV};
+}
 function obv(data){let o=0;const r=[0];for(let i=1;i<data.length;i++){o+=data[i].close>data[i-1].close?data[i].volume:data[i].close<data[i-1].close?-data[i].volume:0;r.push(o);}return r;}
 function vwap(data,n=20){const sl=data.slice(-n);const tv=sl.reduce((s,d)=>s+d.volume,0)||1;return sl.reduce((s,d)=>s+((d.high+d.low+d.close)/3)*d.volume,0)/tv;}
 function bbWidth(bbArr){const last=bbArr[bbArr.length-1];if(!last)return 0;return(last.u-last.l)/last.m;}
@@ -1392,7 +1420,7 @@ function renderAnalysis(ticker) {
     </div>
   `;
 
-  const pillsHTML=r.sigs.map(s=>`<span class="pill ${s.d>0?'b':s.d<0?'r':'n'}">${s.n} ${s.v}</span>`).join('');
+  const pillsHTML=r.sigs.map(s=>`<span class="pill ${s.d>0?'b':s.d<0?'r':'n'}">${s.n} ${s.v??'—'}</span>`).join('');
   const indDescMap = {
     '추세 (ADX)':   'ADX 25↑ 추세장, 20↓ 횡보장',
     'OBV':          '거래량 기반 자금 흐름 · 다이버전스 주목',
@@ -1408,14 +1436,18 @@ function renderAnalysis(ticker) {
     '감성지수':     '70↑ 탐욕(매수 주의) · 30↓ 공포(매수 기회)',
     '애널리스트':   '월가 목표가 대비 현재 위치',
   };
-  const indHTML=`<div class="itbl">${r.sigs.map(s=>`
-    <div class="idrow">
+  const indHTML=`<div class="itbl">${r.sigs.map(s=>{
+    const noData = s.v===null || s.v===undefined || s.v==='undefined' || s.v==='null';
+    const valStr = noData ? '—' : s.v;
+    const noteStr = noData ? '<span style="color:var(--t5)">데이터 없음</span>' : s.note;
+    return `<div class="idrow" style="${noData?'opacity:0.4':''}">
       <div class="idl">
         <div class="idn">${s.n}</div>
-        <div class="idd">${s.note}${indDescMap[s.n]?` · <span style="color:var(--t5)">${indDescMap[s.n]}</span>`:''}</div>
+        <div class="idd">${noteStr}${!noData&&indDescMap[s.n]?` · <span style="color:var(--t5)">${indDescMap[s.n]}</span>`:''}</div>
       </div>
-      <div class="idv ${s.d>0?'b':s.d<0?'r':'n'}">${s.v}</div>
-    </div>`).join('')}</div>`;
+      <div class="idv ${noData?'n':s.d>0?'b':s.d<0?'r':'n'}">${valStr}</div>
+    </div>`;
+  }).join('')}</div>`;
 
   el.innerHTML=`
     <div class="chip-scroll">${chips}</div>
@@ -1447,17 +1479,18 @@ function renderAnalysis(ticker) {
     <div class="itbl">
       ${r.filters ? Object.entries(r.filters).map(([k,f])=>{
         const label={trend:'[1] 추세',smartMoney:'[2] 스마트머니',volatility:'[3] 변동성',timing:'[4] 타이밍',sentiment:'[5] 감성',analyst:'[6] 애널리스트'}[k]||k;
-        const color=f.dir>0?'var(--green)':f.dir<0?'var(--red)':'var(--t4)';
-        return `<div class="idrow">
+        const color=f.dir>0?'var(--green)':f.dir<0?'var(--red)':'var(--t5)';
+        const isZero = f.score === 0;
+        return `<div class="idrow" style="${isZero?'opacity:0.45':''}">
           <div class="idl">
             <div class="idn" style="font-size:12px;">${label}</div>
-            <div class="idd">${f.label}</div>
+            <div class="idd">${f.label}${isZero?' · <span style="color:var(--t5)">중립</span>':''}</div>
           </div>
           <div style="display:flex;align-items:center;gap:6px;">
             <div style="width:40px;height:4px;background:var(--border);border-radius:2px;">
               <div style="width:${Math.min(100,Math.abs(f.score)/25*100)}%;height:100%;background:${color};border-radius:2px;"></div>
             </div>
-            <div class="idv ${f.dir>0?'b':f.dir<0?'r':'n'}" style="min-width:30px;text-align:right;">${f.score>0?'+':''}${f.score}</div>
+            <div class="idv ${f.dir>0?'b':f.dir<0?'r':'n'}" style="min-width:30px;text-align:right;${isZero?'color:var(--t5)':''}">${isZero?'—':((f.score>0?'+':'')+f.score)}</div>
           </div>
         </div>`;
       }).join('') : '<div class="idrow"><span class="il" style="color:var(--t4);">재분석을 실행해주세요</span></div>'}
