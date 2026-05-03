@@ -1630,7 +1630,7 @@ function renderSummary() {
 // GEMINI + 뉴스·일정
 // ═══════════════════════════════════════════════
 const GEMINI_KEY = 'AIzaSyDA0G93LrFdTCpRn4w-L8fqpPe6n7FHhQk';
-const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_KEY}`;
+const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_KEY}`;
 
 let activeNewsTicker = null;
 let activeNewsSeg = 'news';
@@ -1703,35 +1703,42 @@ async function loadNews(ticker) {
   const el = document.getElementById('newsSection');
   el.innerHTML = '<div class="news-loading">📰 뉴스 불러오는 중...</div>';
   try {
-    const d = await fetchJSON(`https://query1.finance.yahoo.com/v1/finance/search?q=${ticker}&lang=en&region=US&newsCount=8&quotesCount=0`);
-    const news = d?.news || [];
-    if (!news.length) { el.innerHTML='<div class="empty">뉴스가 없습니다</div>'; return; }
+    // Finnhub 뉴스 (CORS 없이 직접 호출)
+    const today = new Date().toISOString().slice(0,10);
+    const from  = new Date(Date.now() - 7*24*60*60*1000).toISOString().slice(0,10);
+    const news  = await finnhub(`/company-news?symbol=${ticker}&from=${from}&to=${today}`);
+
+    if (!Array.isArray(news) || !news.length) {
+      el.innerHTML='<div class="empty">최근 7일 내 뉴스가 없습니다</div>';
+      return;
+    }
+
+    // 최신순 8개
+    const items = news.sort((a,b)=>b.datetime-a.datetime).slice(0,8);
 
     // 카드 먼저 표시
-    el.innerHTML = news.map((n,i) => `
-      <div class="news-item" onclick="window.open('${n.link}','_blank')" id="news-${i}">
-        <div class="news-title" id="title-${i}">${n.title}</div>
+    el.innerHTML = items.map((n,i) => `
+      <div class="news-item" onclick="window.open('${n.url}','_blank')" id="news-${i}">
+        <div class="news-title" id="title-${i}">${n.headline}</div>
         <div class="news-summary" id="summary-${i}" style="color:var(--t4);font-style:italic;">번역 중...</div>
         <div class="news-meta">
-          <span class="news-src">${n.publisher||''}</span>
-          <span>${n.providerPublishTime ? new Date(n.providerPublishTime*1000).toLocaleString('ko-KR', {timeZone:'Asia/Seoul', year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', hour12:false}) : ''}</span>
+          <span class="news-src">${n.source||''}</span>
+          <span>${n.datetime ? new Date(n.datetime*1000).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}) : ''}</span>
         </div>
       </div>
     `).join('');
 
-    // Gemini로 병렬 처리
-    const promises = news.map(async (n, i) => {
+    // Gemini 병렬 번역
+    const promises = items.map(async (n, i) => {
       try {
         if (i < 5) {
-          // 제목 번역 + 요약 병렬
           const [titleKo, summaryKo] = await Promise.all([
-            geminiTranslateTitle(n.title),
-            geminiSummarize(n.title, n.summary)
+            geminiTranslateTitle(n.headline),
+            geminiSummarize(n.headline, n.summary)
           ]);
           return { i, titleKo, summaryKo };
         } else {
-          // 제목 번역만
-          const titleKo = await geminiTranslateTitle(n.title);
+          const titleKo = await geminiTranslateTitle(n.headline);
           return { i, titleKo, summaryKo: null };
         }
       } catch(e) {
@@ -1743,7 +1750,7 @@ async function loadNews(ticker) {
     for (const { i, titleKo, summaryKo } of results) {
       const titleEl   = document.getElementById(`title-${i}`);
       const summaryEl = document.getElementById(`summary-${i}`);
-      if (titleEl   && titleKo)   titleEl.textContent = titleKo;
+      if (titleEl && titleKo) titleEl.textContent = titleKo;
       if (summaryEl) {
         if (summaryKo) {
           summaryEl.textContent = summaryKo;
@@ -1763,11 +1770,11 @@ async function loadCalendar(ticker) {
   const el = document.getElementById('calSection');
   el.innerHTML = '<div class="news-loading">📅 일정 불러오는 중...</div>';
   try {
-    // Finnhub: 어닝 캘린더, 배당, 기본정보 병렬 fetch
-    const [earningsData, dividendData, basicData] = await Promise.all([
+    // Finnhub: 어닝, 기본정보 병렬 fetch (배당은 무료플랜 제한으로 제외)
+    const [earningsData, basicData, companyData] = await Promise.all([
       finnhub(`/stock/earnings?symbol=${ticker}`),
-      finnhub(`/stock/dividend2?symbol=${ticker}&from=2024-01-01&to=2027-12-31`),
-      finnhub(`/stock/metric?symbol=${ticker}&metric=all`)
+      finnhub(`/stock/metric?symbol=${ticker}&metric=all`),
+      finnhub(`/stock/profile2?symbol=${ticker}`)
     ]);
 
     const events = [];
@@ -1787,30 +1794,17 @@ async function loadCalendar(ticker) {
       });
     }
 
-    // 배당
-    if (Array.isArray(dividendData?.data)) {
-      dividendData.data.slice(0, 6).forEach(d => {
-        if (!d.exDividendDate) return;
-        const date = new Date(d.exDividendDate);
-        events.push({
-          date,
-          type: 'div',
-          label: '배당락일',
-          detail: `배당금 $${d.amount?.toFixed(3)||'—'} · 수익률 ${d.yield?+(d.yield*100).toFixed(2)+'%':'—'}`
-        });
-        if (d.payDate) {
-          events.push({
-            date: new Date(d.payDate),
-            type: 'div',
-            label: '배당 지급일',
-            detail: `배당금 $${d.amount?.toFixed(3)||'—'}`
-          });
-        }
+    // Key Stats + 배당 정보
+    const m = basicData?.metric || {};
+    if (m.dividendPerShareAnnual) {
+      events.push({
+        date: new Date(),
+        type: 'div',
+        label: '배당 정보',
+        detail: `연간 배당금 $${m.dividendPerShareAnnual?.toFixed(3)||'—'} · 수익률 ${m.dividendYieldIndicatedAnnual?.toFixed(2)||'—'}%`
       });
     }
 
-    // Key Stats
-    const m = basicData?.metric || {};
     const infoHtml = (m['52WeekHigh'] || m.epsBasicExclExtraItemsTTM) ? `
       <div class="card" style="margin-bottom:14px;padding:12px 14px;">
         <div style="font-size:11px;font-weight:700;color:var(--t4);letter-spacing:2px;margin-bottom:10px;">KEY STATS</div>
