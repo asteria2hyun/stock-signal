@@ -1094,6 +1094,39 @@ function atr(data,p=14){const tr=data.map((d,i)=>i===0?d.high-d.low:Math.max(d.h
 function sr(data,n=20){const sl=data.slice(-n);return{res:Math.max(...sl.map(d=>d.high)),sup:Math.min(...sl.map(d=>d.low)),piv:(Math.max(...sl.map(d=>d.high))+Math.min(...sl.map(d=>d.low))+data[data.length-1].close)/3};}
 function fib(data,n=60){const sl=data.slice(-n);const hi=Math.max(...sl.map(d=>d.high)),lo=Math.min(...sl.map(d=>d.low)),df=hi-lo;return{r236:hi-df*.236,r382:hi-df*.382,r500:hi-df*.5,r618:hi-df*.618,hi,lo};}
 
+// ── 모멘텀 지표 ──────────────────────────────
+// ROC: 기간 대비 가격 변화율 (%)
+function roc(c, p=12) {
+  if (c.length < p+1) return 0;
+  const cur = c[c.length-1], prev = c[c.length-1-p];
+  return prev ? (cur - prev) / prev * 100 : 0;
+}
+
+// MFI: 거래량 가중 RSI (14일) — 스마트머니 흐름
+function mfi(data, p=14) {
+  if (data.length < p+1) return 50;
+  let posFlow=0, negFlow=0;
+  for (let i=data.length-p; i<data.length; i++) {
+    const tp  = (data[i].high + data[i].low + data[i].close) / 3;
+    const tpp = (data[i-1].high + data[i-1].low + data[i-1].close) / 3;
+    const raw = tp * (data[i].volume || 0);
+    if (tp > tpp) posFlow += raw;
+    else          negFlow += raw;
+  }
+  if (negFlow === 0) return 100;
+  return 100 - 100 / (1 + posFlow / negFlow);
+}
+
+// Williams %R: -100~0 (과매도 < -80, 과매수 > -20)
+function williamsR(data, p=14) {
+  if (data.length < p) return -50;
+  const sl = data.slice(-p);
+  const hi = Math.max(...sl.map(d=>d.high));
+  const lo = Math.min(...sl.map(d=>d.low));
+  const c  = data[data.length-1].close;
+  return hi === lo ? -50 : (hi - c) / (hi - lo) * -100;
+}
+
 // ═══════════════════════════════════════════════
 // ASYMMETRIC SIGNAL ENGINE
 // mode: 'sell' (보유중) | 'buy' (관심/신규)
@@ -1118,6 +1151,10 @@ function analyze(data, qty, quote, mode, analyst=null) {
   const vols=data.map(d=>d.volume);
   const avgV=sma(vols,20)[vols.length-1]||1;
   const volR=data[data.length-1].volume/avgV;
+  // 모멘텀
+  const rocV  = roc(closes, 12);
+  const mfiV  = mfi(data, 14);
+  const willR = williamsR(data, 14);
 
   let score=0; const sigs=[];
 
@@ -1178,6 +1215,28 @@ function analyze(data, qty, quote, mode, analyst=null) {
   for(const [lv,nm] of [[fibV.r618,'Fib 61.8%'],[fibV.r500,'Fib 50%'],[fibV.r382,'Fib 38.2%']]){
     if(Math.abs(price-lv)/price<0.015){score+=(price>lv?-0.5:1);sigs.push({n:nm,v:'$'+lv.toFixed(2),note:'근접',d:price>lv?0:1});break;}
   }
+
+  // ── 모멘텀 지표 ────────────────────────────
+  // ROC (12일)
+  if      (rocV > 10) { score -= 1.5; sigs.push({n:'ROC',  v:'+'+rocV.toFixed(1)+'%', note:'과열 급등', d:-1}); }
+  else if (rocV > 5)  { score -= 0.5; sigs.push({n:'ROC',  v:'+'+rocV.toFixed(1)+'%', note:'상승 모멘텀', d:-1}); }
+  else if (rocV < -10){ score += 1.5; sigs.push({n:'ROC',  v:rocV.toFixed(1)+'%',     note:'과매도 급락', d:1}); }
+  else if (rocV < -5) { score += 0.5; sigs.push({n:'ROC',  v:rocV.toFixed(1)+'%',     note:'하락 모멘텀', d:1}); }
+  else                {               sigs.push({n:'ROC',  v:rocV.toFixed(1)+'%',     note:'중립',        d:0}); }
+
+  // MFI (14일) — 거래량 가중 RSI
+  if      (mfiV >= 80) { score -= 1.5; sigs.push({n:'MFI', v:mfiV.toFixed(1), note:'자금 과매수',  d:-1}); }
+  else if (mfiV >= 65) { score -= 0.5; sigs.push({n:'MFI', v:mfiV.toFixed(1), note:'자금 유입 강', d:-1}); }
+  else if (mfiV <= 20) { score += 1.5; sigs.push({n:'MFI', v:mfiV.toFixed(1), note:'자금 과매도',  d:1}); }
+  else if (mfiV <= 35) { score += 0.5; sigs.push({n:'MFI', v:mfiV.toFixed(1), note:'자금 유출 강', d:1}); }
+  else                 {               sigs.push({n:'MFI', v:mfiV.toFixed(1), note:'중립',          d:0}); }
+
+  // Williams %R (14일)
+  if      (willR >= -10) { score -= 1.5; sigs.push({n:'Williams %R', v:willR.toFixed(1), note:'극과매수', d:-1}); }
+  else if (willR >= -20) { score -= 0.5; sigs.push({n:'Williams %R', v:willR.toFixed(1), note:'과매수',   d:-1}); }
+  else if (willR <= -90) { score += 1.5; sigs.push({n:'Williams %R', v:willR.toFixed(1), note:'극과매도', d:1}); }
+  else if (willR <= -80) { score += 0.5; sigs.push({n:'Williams %R', v:willR.toFixed(1), note:'과매도',   d:1}); }
+  else                   {               sigs.push({n:'Williams %R', v:willR.toFixed(1), note:'중립',      d:0}); }
 
   // ── 비대칭 가중치 보정 ──────────────────────
   // 보유중(매도 관점): 추세 지속·과매수 탈출에 더 민감
