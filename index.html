@@ -706,9 +706,11 @@ function loadCache() {
     if (!raw) return;
     const slim = JSON.parse(raw);
     const now = Date.now();
-    const MAX_AGE = 12 * 60 * 60 * 1000; // 12시간 이내만 복원
+    const MAX_AGE = 12 * 60 * 60 * 1000;
     for (const [ticker, c] of Object.entries(slim)) {
       if (now - c.savedAt > MAX_AGE) continue;
+      // 구버전 캐시 (filters 없음) 무시
+      if (!c.result?.filters) continue;
       cache[ticker] = c;
     }
   } catch(e) {}
@@ -1378,7 +1380,6 @@ function renderAnalysis(ticker) {
     ${type==='holding' && r.sellQty ? `
     <div class="irow"><span class="il">권장 매도 수량</span><span class="iv r">${r.sellQty}주 (${pct}%)</span></div>
     <div class="irow"><span class="il">매도 후 잔여</span><span class="iv">${(h?.qty||0)-r.sellQty}주</span></div>` : ''}
-    <div class="irow"><span class="il">매도 손절가</span><span class="iv r">$${r.sellStop?.toFixed(2)||'—'}</span></div>
   `;
 
   // 매수 타점 섹션
@@ -1389,14 +1390,30 @@ function renderAnalysis(ticker) {
         ${r.recommend==='buy'?'<span style="font-size:10px;background:rgba(0,209,122,.2);color:var(--green2);padding:1px 6px;border-radius:4px;margin-left:4px;">추천</span>':''}
       </span>
     </div>
-    <div class="irow"><span class="il">매수 목표가</span><span class="iv g">$${r.buyGoal?.toFixed(2)||'—'}</span></div>
-    <div class="irow"><span class="il">매수 손절가</span><span class="iv r">$${r.buyStop?.toFixed(2)||'—'}</span></div>
   `;
 
   const pillsHTML=r.sigs.map(s=>`<span class="pill ${s.d>0?'b':s.d<0?'r':'n'}">${s.n} ${s.v}</span>`).join('');
+  const indDescMap = {
+    '추세 (ADX)':   'ADX 25↑ 추세장, 20↓ 횡보장',
+    'OBV':          '거래량 기반 자금 흐름 · 다이버전스 주목',
+    '변동성':       'BB Squeeze = 돌파 임박 신호',
+    'RSI':          '70↑ 과매수 · 30↓ 과매도',
+    'MACD':         '골든크로스 = 매수, 데드크로스 = 매도',
+    '스토캐스틱':   '80↑ 과매수 · 20↓ 과매도',
+    'MFI':          '거래량 가중 RSI · 80↑ 자금 과매수',
+    'Williams %R':  '-20↑ 과매수 · -80↓ 과매도',
+    'ROC(12)':      '12일 가격변화율 · ±10% 강신호',
+    '거래량':       '1.5x↑ = 돌파 거래량 · 신뢰도 상승',
+    '지지/저항':    '저항선 근접 매도 · 지지선 근접 매수',
+    '감성지수':     '70↑ 탐욕(매수 주의) · 30↓ 공포(매수 기회)',
+    '애널리스트':   '월가 목표가 대비 현재 위치',
+  };
   const indHTML=`<div class="itbl">${r.sigs.map(s=>`
     <div class="idrow">
-      <div class="idl"><div class="idn">${s.n}</div><div class="idd">${s.note}</div></div>
+      <div class="idl">
+        <div class="idn">${s.n}</div>
+        <div class="idd">${s.note}${indDescMap[s.n]?` · <span style="color:var(--t5)">${indDescMap[s.n]}</span>`:''}</div>
+      </div>
       <div class="idv ${s.d>0?'b':s.d<0?'r':'n'}">${s.v}</div>
     </div>`).join('')}</div>`;
 
@@ -1415,10 +1432,10 @@ function renderAnalysis(ticker) {
       <div class="hero-sub">${r.note}</div>
       <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;">
         <span style="font-size:11px;background:rgba(255,255,255,.08);padding:3px 8px;border-radius:6px;">
-          📊 ${r.marketState}
+          📊 ${r.marketState||'분석중'}
         </span>
         <span style="font-size:11px;background:rgba(255,255,255,.08);padding:3px 8px;border-radius:6px;">
-          신뢰도 ${r.confidence}/100
+          신뢰도 ${r.confidence??Math.round(Math.min(100,Math.max(0,50+r.score*0.5)))}/100
         </span>
         ${r.isSqueeze?'<span style="font-size:11px;background:rgba(255,214,0,.2);color:var(--yellow);padding:3px 8px;border-radius:6px;">⚡ BB Squeeze</span>':''}
       </div>
@@ -1428,9 +1445,8 @@ function renderAnalysis(ticker) {
     <!-- 필터 점수판 -->
     <div class="sec">🔬 필터 분석</div>
     <div class="itbl">
-      ${Object.entries(r.filters||{}).map(([k,f])=>{
+      ${r.filters ? Object.entries(r.filters).map(([k,f])=>{
         const label={trend:'[1] 추세',smartMoney:'[2] 스마트머니',volatility:'[3] 변동성',timing:'[4] 타이밍',sentiment:'[5] 감성',analyst:'[6] 애널리스트'}[k]||k;
-        const bar=Math.abs(f.score);
         const color=f.dir>0?'var(--green)':f.dir<0?'var(--red)':'var(--t4)';
         return `<div class="idrow">
           <div class="idl">
@@ -1439,22 +1455,22 @@ function renderAnalysis(ticker) {
           </div>
           <div style="display:flex;align-items:center;gap:6px;">
             <div style="width:40px;height:4px;background:var(--border);border-radius:2px;">
-              <div style="width:${Math.min(100,bar/25*100)}%;height:100%;background:${color};border-radius:2px;"></div>
+              <div style="width:${Math.min(100,Math.abs(f.score)/25*100)}%;height:100%;background:${color};border-radius:2px;"></div>
             </div>
             <div class="idv ${f.dir>0?'b':f.dir<0?'r':'n'}" style="min-width:30px;text-align:right;">${f.score>0?'+':''}${f.score}</div>
           </div>
         </div>`;
-      }).join('')}
+      }).join('') : '<div class="idrow"><span class="il" style="color:var(--t4);">재분석을 실행해주세요</span></div>'}
       <div class="idrow" style="background:var(--bg2);">
         <div class="idl"><div class="idn" style="font-weight:700;">종합 점수</div></div>
         <div class="idv ${r.score>=0?'b':'r'}" style="font-size:16px;">${r.score>0?'+':''}${r.score}</div>
       </div>
     </div>
 
-    <div class="sec">🔴 매도 타점</div>
+    <div class="sec">🔴 오늘 매도 타점</div>
     <div class="itbl">${sellRows}</div>
 
-    <div class="sec">🟢 매수 타점</div>
+    <div class="sec">🟢 오늘 매수 타점</div>
     <div class="itbl">${buyRows}</div>
 
     <div class="sec">차트</div>
