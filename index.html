@@ -1053,31 +1053,36 @@ async function fetchHistory(ticker, tf='1M') {
 
 async function fetchAnalyst(ticker) {
   try {
-    const [rec, target] = await Promise.all([
-      finnhub(`/recommendation?symbol=${ticker}`),
-      finnhub(`/stock/price-target?symbol=${ticker}`)
-    ]);
-    const latest = Array.isArray(rec) ? rec[0] : null;
-    const total = latest ? (latest.strongBuy + latest.buy + latest.hold + latest.sell + latest.strongSell) : 0;
-    const recMean = total > 0
-      ? (latest.strongBuy*1 + latest.buy*2 + latest.hold*3 + latest.sell*4 + latest.strongSell*5) / total
-      : null;
-    const recKey = recMean
-      ? recMean <= 1.5 ? 'strongBuy' : recMean <= 2.5 ? 'buy' : recMean <= 3.5 ? 'hold' : recMean <= 4.5 ? 'sell' : 'strongSell'
-      : null;
+    // recommendation은 무료, price-target은 별도 시도
+    const rec = await finnhub(`/stock/recommendation?symbol=${ticker}`);
+    const latest = Array.isArray(rec) && rec.length > 0 ? rec[0] : null;
+    if (!latest) return null;
+
+    const total = (latest.strongBuy||0)+(latest.buy||0)+(latest.hold||0)+(latest.sell||0)+(latest.strongSell||0);
+    if (!total) return null;
+
+    const recMean = ((latest.strongBuy||0)*1+(latest.buy||0)*2+(latest.hold||0)*3+(latest.sell||0)*4+(latest.strongSell||0)*5)/total;
+    const recKey  = recMean<=1.5?'strongBuy':recMean<=2.5?'buy':recMean<=3.5?'hold':recMean<=4.5?'sell':'strongSell';
+
+    let targetMean=null, targetHigh=null, targetLow=null, numAnalysts=total;
+    try {
+      const target = await finnhub(`/stock/price-target?symbol=${ticker}`);
+      if (target?.targetMean) {
+        targetMean  = target.targetMean;
+        targetHigh  = target.targetHigh;
+        targetLow   = target.targetLow;
+        numAnalysts = target.numberOfAnalysts || total;
+      }
+    } catch(e) {}
+
     return {
-      targetMean:   target?.targetMean   || null,
-      targetHigh:   target?.targetHigh   || null,
-      targetLow:    target?.targetLow    || null,
-      targetMedian: target?.targetMedian || null,
-      numAnalysts:  target?.numberOfAnalysts || 0,
-      recKey,
-      recMean,
-      strongBuy:  latest?.strongBuy  || 0,
-      buy:        latest?.buy        || 0,
-      hold:       latest?.hold       || 0,
-      sell:       latest?.sell       || 0,
-      strongSell: latest?.strongSell || 0,
+      targetMean, targetHigh, targetLow, targetMedian: targetMean,
+      numAnalysts, recKey, recMean,
+      strongBuy:  latest.strongBuy  || 0,
+      buy:        latest.buy        || 0,
+      hold:       latest.hold       || 0,
+      sell:       latest.sell       || 0,
+      strongSell: latest.strongSell || 0,
     };
   } catch(e) { return null; }
 }
@@ -1650,13 +1655,44 @@ async function geminiAsk(prompt) {
   } catch(e) { return null; }
 }
 
-async function geminiTranslateTitle(title) {
-  return await geminiAsk(`다음 영문 주식 기사 제목을 한국어로 번역. 번역문만 출력:\n${title}`);
-}
+// 뉴스 전체 한번에 번역+요약 (API 호출 1번)
+async function geminiBatchNews(items) {
+  const list = items.map((n,i) =>
+    `[${i+1}] 제목: ${n.headline}\n내용: ${n.summary||n.headline}`
+  ).join('\n\n');
 
-async function geminiSummarize(title, summary) {
-  const text = title + (summary ? '. ' + summary : '');
-  return await geminiAsk(`다음 영문 주식 기사를 한국어 2문장으로 요약. 요약문만 출력:\n${text}`);
+  const prompt = `다음 주식 뉴스 기사들을 한국어로 번역/요약해줘.
+반드시 아래 형식으로만 답해 (다른 말 없이):
+
+[1]
+제목: (한국어 번역)
+요약: (2문장 요약, 없으면 생략)
+
+[2]
+제목: (한국어 번역)
+요약: (2문장 요약, 없으면 생략)
+
+(계속...)
+
+---
+${list}`;
+
+  const result = await geminiAsk(prompt);
+  if (!result) return null;
+
+  const parsed = {};
+  const blocks = result.split(/\[(\d+)\]/);
+  for (let i=1; i<blocks.length; i+=2) {
+    const idx = parseInt(blocks[i]) - 1;
+    const block = blocks[i+1] || '';
+    const titleMatch = block.match(/제목:\s*(.+)/);
+    const summaryMatch = block.match(/요약:\s*([\s\S]+?)(?=\n\n|\n\[|$)/);
+    parsed[idx] = {
+      title:   titleMatch?.[1]?.trim() || null,
+      summary: summaryMatch?.[1]?.trim() || null
+    };
+  }
+  return parsed;
 }
 
 function switchNewsSeg(seg) {
@@ -1728,32 +1764,16 @@ async function loadNews(ticker) {
       </div>
     `).join('');
 
-    // Gemini 병렬 번역
-    const promises = items.map(async (n, i) => {
-      try {
-        if (i < 5) {
-          const [titleKo, summaryKo] = await Promise.all([
-            geminiTranslateTitle(n.headline),
-            geminiSummarize(n.headline, n.summary)
-          ]);
-          return { i, titleKo, summaryKo };
-        } else {
-          const titleKo = await geminiTranslateTitle(n.headline);
-          return { i, titleKo, summaryKo: null };
-        }
-      } catch(e) {
-        return { i, titleKo: null, summaryKo: null };
-      }
-    });
-
-    const results = await Promise.all(promises);
-    for (const { i, titleKo, summaryKo } of results) {
+    // Gemini 배치 번역 (한번에 전체 처리)
+    const batchResult = await geminiBatchNews(items);
+    for (let i=0; i<items.length; i++) {
+      const r = batchResult?.[i];
       const titleEl   = document.getElementById(`title-${i}`);
       const summaryEl = document.getElementById(`summary-${i}`);
-      if (titleEl && titleKo) titleEl.textContent = titleKo;
+      if (titleEl   && r?.title)   titleEl.textContent = r.title;
       if (summaryEl) {
-        if (summaryKo) {
-          summaryEl.textContent = summaryKo;
+        if (r?.summary) {
+          summaryEl.textContent = r.summary;
           summaryEl.style.color = 'var(--t3)';
           summaryEl.style.fontStyle = 'normal';
         } else {
