@@ -1887,10 +1887,10 @@ async function loadCalendar(ticker) {
   el.innerHTML = '<div class="news-loading">📅 일정 불러오는 중...</div>';
   try {
     // 병렬로 한번에 fetch
-    const [earningsData, basicData, optData] = await Promise.all([
+    const [earningsData, basicData, chartMeta] = await Promise.all([
       finnhub(`/stock/earnings?symbol=${ticker}`),
       finnhub(`/stock/metric?symbol=${ticker}&metric=all`),
-      fetchJSON(`https://query1.finance.yahoo.com/v7/finance/options/${ticker}`).catch(()=>null)
+      fetchJSON(`https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=5d`).catch(()=>null)
     ]);
 
     const events = [];
@@ -1914,40 +1914,25 @@ async function loadCalendar(ticker) {
     const m = basicData?.metric || {};
     const divAmt   = m['dividendPerShareAnnual'] || m['lastDividendValue'];
     const divYield = m['dividendYieldIndicatedAnnual'];
-
-    // Yahoo v7 options meta에서 공시된 다음 배당락일 추출
-    const optMeta = optData?.optionChain?.result?.[0]?.quote;
-    const exDivTs      = optMeta?.exDividendDate;       // 다음 배당락일 (unix)
-    const divPerShare  = optMeta?.trailingAnnualDividendRate; // 연간 배당금
-    const fwdDivRate   = optMeta?.dividendRate;         // 선언된 분기 배당금×빈도
-    const divDate      = optMeta?.dividendDate;         // 배당 지급일
+    const meta     = chartMeta?.chart?.result?.[0]?.meta;
+    const exDivTs  = meta?.exDividendDate;
+    const divRate  = meta?.dividendRate;
 
     if (exDivTs) {
       const exDate = new Date(exDivTs * 1000);
-      // 분기 배당금 = dividendRate (연간) / 4 — 단, 실제 선언 금액 우선
-      const perShare = fwdDivRate
-        ? (fwdDivRate / 4).toFixed(4)
-        : divAmt ? (divAmt / 4).toFixed(4) : '미정';
+      const perShare = divRate?.toFixed(4) || (divAmt ? (divAmt/4).toFixed(4) : '미정');
       events.push({
         date: exDate,
         type: 'div',
-        label: '배당락일 (공시)',
+        label: '배당락일',
         detail: `이 날까지 보유 시 배당 수령 · 주당 $${perShare}`
       });
-      if (divDate) {
-        events.push({
-          date: new Date(divDate * 1000),
-          type: 'div',
-          label: '배당 지급일',
-          detail: `주당 $${perShare} 지급`
-        });
-      }
     } else if (divAmt && divAmt > 0) {
       events.push({
         date: new Date(),
         type: 'div',
         label: '배당 정보',
-        detail: `다음 배당락일 미확인 · 연간 주당 $${divAmt.toFixed(3)}`
+        detail: `다음 배당락일 미확인 · 주당 $${divAmt.toFixed(3)}`
       });
     }
 
