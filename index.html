@@ -1366,6 +1366,8 @@ function renderAnalysis(ticker) {
   const c=cache[ticker];
   if (!c?.result) return;
   const {quote:q, hist, result:r, analyst, type} = c;
+  // hist 없으면 차트 없이 표시 (캐시 복원 시 hist 미포함)
+  const hasChart = hist && hist.length >= 5;
 
   const el=document.getElementById('analysisContent');
 
@@ -1456,7 +1458,12 @@ function renderAnalysis(ticker) {
           <button class="tf ${currentTF==='6M'?'on':''}" onclick="changeTF('6M',this)">6M</button>
         </div>
       </div>
-      <div style="position:relative;height:220px;"><canvas id="mainChart"></canvas></div>
+      ${hasChart
+        ? `<div style="position:relative;height:220px;"><canvas id="mainChart"></canvas></div>`
+        : `<div style="height:80px;display:flex;align-items:center;justify-content:center;color:var(--t4);font-size:13px;">
+             📊 전체 분석 실행 후 차트가 표시됩니다
+           </div>`
+      }
     </div>
 
     <div class="sec">지표 요약</div>
@@ -1522,6 +1529,7 @@ function renderAnalysis(ticker) {
 }
 
 function renderChart(data, r) {
+  if (!data || !data.length || !r?.bbA) return;
   const canvas=document.getElementById('mainChart');
   if (!canvas) return;
   if (chartInst) { chartInst.destroy(); chartInst=null; }
