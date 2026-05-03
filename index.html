@@ -1896,11 +1896,10 @@ async function loadCalendar(ticker) {
   try {
     // 병렬로 한번에 fetch
     const today = new Date().toISOString().slice(0,10);
-    const from3y = new Date(Date.now() - 3*365*24*60*60*1000).toISOString().slice(0,10);
-    const [earningsData, basicData, dividendData] = await Promise.all([
+    const [earningsData, basicData, yahooData] = await Promise.all([
       finnhub(`/stock/earnings?symbol=${ticker}`),
       finnhub(`/stock/metric?symbol=${ticker}&metric=all`),
-      finnhub(`/stock/dividend?symbol=${ticker}&from=${from3y}&to=${today}`).catch(()=>null)
+      fetchJSON(`https://query1.finance.yahoo.com/v10/finance/quoteSummary/${ticker}?modules=summaryDetail%2CcalendarEvents`).catch(()=>null)
     ]);
 
     const events = [];
@@ -1922,35 +1921,30 @@ async function loadCalendar(ticker) {
 
     // Key Stats + 배당 정보
     const m = basicData?.metric || {};
+    const yDetail = yahooData?.quoteSummary?.result?.[0]?.summaryDetail;
+    const yCal    = yahooData?.quoteSummary?.result?.[0]?.calendarEvents;
 
-    // Finnhub 배당 데이터 (이미 병렬로 가져옴)
-    if (Array.isArray(dividendData) && dividendData.length > 0) {
-      // 최근 배당 이력 (최대 4개)
-      const recentDivs = dividendData
-        .sort((a,b) => new Date(b.exDate||b.date) - new Date(a.exDate||a.date))
-        .slice(0, 4);
-
-      recentDivs.forEach(d => {
-        const exDate = d.exDate || d.date;
-        if (!exDate) return;
-        const date = new Date(exDate);
-        events.push({
-          date,
-          type: 'div',
-          label: '배당락일 (Ex-Dividend)',
-          detail: `배당금 $${d.amount?.toFixed(3)||'—'} · 이 날까지 보유해야 배당 수령`
-        });
-        if (d.payDate) {
-          events.push({
-            date: new Date(d.payDate),
-            type: 'div',
-            label: '배당 지급일',
-            detail: `배당금 $${d.amount?.toFixed(3)||'—'} 지급`
-          });
-        }
+    // 배당락일 (Yahoo Finance)
+    if (yDetail?.exDividendDate?.raw) {
+      const exDate = new Date(yDetail.exDividendDate.raw * 1000);
+      events.push({
+        date: exDate,
+        type: 'div',
+        label: '배당락일 (Ex-Dividend)',
+        detail: `이 날까지 보유해야 배당 수령 · 배당금 $${yDetail.dividendRate?.fmt||m.dividendPerShareAnnual?.toFixed(2)||'—'} · 수익률 ${yDetail.dividendYield?.fmt||(m.dividendYieldIndicatedAnnual?m.dividendYieldIndicatedAnnual.toFixed(2)+'%':'—')}`
       });
-    } else if (m.dividendPerShareAnnual) {
-      // 배당 이력 없어도 연간 배당 정보는 표시
+    }
+    // 배당 지급일
+    if (yCal?.dividendDate?.raw) {
+      events.push({
+        date: new Date(yCal.dividendDate.raw * 1000),
+        type: 'div',
+        label: '배당 지급일',
+        detail: `배당금 $${yDetail?.dividendRate?.fmt||'—'} 지급`
+      });
+    }
+    // 둘 다 없으면 연간 배당 정보라도
+    if (!yDetail?.exDividendDate?.raw && m.dividendPerShareAnnual) {
       events.push({
         date: new Date(),
         type: 'div',
