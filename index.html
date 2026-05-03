@@ -1084,58 +1084,35 @@ async function fetchAnalyst(ticker) {
 }
 
 // ═══════════════════════════════════════════════
+// 지표 함수
+// ═══════════════════════════════════════════════
 const sma=(a,n)=>a.map((_,i)=>i<n-1?null:a.slice(i-n+1,i+1).reduce((s,v)=>s+v,0)/n);
 const ema=(a,n)=>{const k=2/(n+1);let e=a[0];const r=[e];for(let i=1;i<a.length;i++){e=a[i]*k+e*(1-k);r.push(e);}return r;};
 function rsi(c,p=14){if(c.length<p+1)return 50;let ag=0,al=0;for(let i=1;i<=p;i++){const d=c[i]-c[i-1];if(d>0)ag+=d;else al-=d;}ag/=p;al/=p;for(let i=p+1;i<c.length;i++){const d=c[i]-c[i-1];ag=(ag*(p-1)+Math.max(d,0))/p;al=(al*(p-1)+Math.max(-d,0))/p;}return al===0?100:100-100/(1+ag/al);}
 function macd(c){const e12=ema(c,12),e26=ema(c,26);const ln=e12.map((v,i)=>v&&e26[i]?v-e26[i]:null);const vd=ln.filter(v=>v!==null);const sv=ema(vd,9);let si=0;const sg=ln.map(v=>v===null?null:sv[si++]);return{ln,sg,hist:ln.map((v,i)=>v!==null&&sg[i]!==null?v-sg[i]:null)};}
 function bb(c,n=20,k=2){return c.map((_,i)=>{if(i<n-1)return null;const sl=c.slice(i-n+1,i+1);const m=sl.reduce((s,v)=>s+v,0)/n;const sd=Math.sqrt(sl.reduce((s,v)=>s+(v-m)**2,0)/n);return{u:m+k*sd,m,l:m-k*sd};});}
 function stoch(data,kp=14,dp=3){const k=data.map((_,i)=>{if(i<kp-1)return null;const sl=data.slice(i-kp+1,i+1);const lo=Math.min(...sl.map(d=>d.low)),hi=Math.max(...sl.map(d=>d.high));return hi===lo?50:(data[i].close-lo)/(hi-lo)*100;});const d=k.map((_,i)=>{const sl=k.slice(Math.max(0,i-dp+1),i+1).filter(v=>v!==null);return sl.length===dp?sl.reduce((s,v)=>s+v,0)/dp:null;});return{k,d};}
-function atr(data,p=14){const tr=data.map((d,i)=>i===0?d.high-d.low:Math.max(d.high-d.low,Math.abs(d.high-data[i-1].close),Math.abs(d.low-data[i-1].close)));const a=sma(tr,p);return a[a.length-1]||0;}
+function atrArr(data,p=14){const tr=data.map((d,i)=>i===0?d.high-d.low:Math.max(d.high-d.low,Math.abs(d.high-data[i-1].close),Math.abs(d.low-data[i-1].close)));return sma(tr,p);}
+function atr(data,p=14){const a=atrArr(data,p);return a[a.length-1]||0;}
 function sr(data,n=20){const sl=data.slice(-n);return{res:Math.max(...sl.map(d=>d.high)),sup:Math.min(...sl.map(d=>d.low)),piv:(Math.max(...sl.map(d=>d.high))+Math.min(...sl.map(d=>d.low))+data[data.length-1].close)/3};}
 function fib(data,n=60){const sl=data.slice(-n);const hi=Math.max(...sl.map(d=>d.high)),lo=Math.min(...sl.map(d=>d.low)),df=hi-lo;return{r236:hi-df*.236,r382:hi-df*.382,r500:hi-df*.5,r618:hi-df*.618,hi,lo};}
-
-// ── 모멘텀 지표 ──────────────────────────────
-// ROC: 기간 대비 가격 변화율 (%)
-function roc(c, p=12) {
-  if (c.length < p+1) return 0;
-  const cur = c[c.length-1], prev = c[c.length-1-p];
-  return prev ? (cur - prev) / prev * 100 : 0;
-}
-
-// MFI: 거래량 가중 RSI (14일) — 스마트머니 흐름
-function mfi(data, p=14) {
-  if (data.length < p+1) return 50;
-  let posFlow=0, negFlow=0;
-  for (let i=data.length-p; i<data.length; i++) {
-    const tp  = (data[i].high + data[i].low + data[i].close) / 3;
-    const tpp = (data[i-1].high + data[i-1].low + data[i-1].close) / 3;
-    const raw = tp * (data[i].volume || 0);
-    if (tp > tpp) posFlow += raw;
-    else          negFlow += raw;
-  }
-  if (negFlow === 0) return 100;
-  return 100 - 100 / (1 + posFlow / negFlow);
-}
-
-// Williams %R: -100~0 (과매도 < -80, 과매수 > -20)
-function williamsR(data, p=14) {
-  if (data.length < p) return -50;
-  const sl = data.slice(-p);
-  const hi = Math.max(...sl.map(d=>d.high));
-  const lo = Math.min(...sl.map(d=>d.low));
-  const c  = data[data.length-1].close;
-  return hi === lo ? -50 : (hi - c) / (hi - lo) * -100;
-}
+function adx(data,p=14){if(data.length<p*2)return{adx:0,pdi:0,mdi:0};const trs=[],pdms=[],mdms=[];for(let i=1;i<data.length;i++){const h=data[i].high,l=data[i].low,ph=data[i-1].high,pl=data[i-1].low,pc=data[i-1].close;trs.push(Math.max(h-l,Math.abs(h-pc),Math.abs(l-pc)));pdms.push(h-ph>pl-l&&h-ph>0?h-ph:0);mdms.push(pl-l>h-ph&&pl-l>0?pl-l:0);}const atrV=sma(trs,p),pdi14=sma(pdms,p),mdi14=sma(mdms,p);const n2=atrV.length-1;const at=atrV[n2]||1,pd=pdi14[n2]||0,md=mdi14[n2]||0;const pdiV=pd/at*100,mdiV=md/at*100;const dxArr=atrV.map((_,i)=>{const at2=atrV[i]||1,pd2=pdi14[i]||0,md2=mdi14[i]||0;const p2=pd2/at2*100,m2=md2/at2*100;return Math.abs(p2-m2)/(p2+m2||1)*100;});const adxA=sma(dxArr.filter(v=>v!=null),p);return{adx:adxA[adxA.length-1]||0,pdi:pdiV,mdi:mdiV};}
+function obv(data){let o=0;const r=[0];for(let i=1;i<data.length;i++){o+=data[i].close>data[i-1].close?data[i].volume:data[i].close<data[i-1].close?-data[i].volume:0;r.push(o);}return r;}
+function vwap(data,n=20){const sl=data.slice(-n);const tv=sl.reduce((s,d)=>s+d.volume,0)||1;return sl.reduce((s,d)=>s+((d.high+d.low+d.close)/3)*d.volume,0)/tv;}
+function bbWidth(bbArr){const last=bbArr[bbArr.length-1];if(!last)return 0;return(last.u-last.l)/last.m;}
+function mfi(data,p=14){if(data.length<p+1)return 50;let posFlow=0,negFlow=0;for(let i=data.length-p;i<data.length;i++){const tp=(data[i].high+data[i].low+data[i].close)/3;const tpp=(data[i-1].high+data[i-1].low+data[i-1].close)/3;const raw=tp*(data[i].volume||0);if(tp>tpp)posFlow+=raw;else negFlow+=raw;}return negFlow===0?100:100-100/(1+posFlow/negFlow);}
+function roc(c,p=12){if(c.length<p+1)return 0;const cur=c[c.length-1],prev=c[c.length-1-p];return prev?(cur-prev)/prev*100:0;}
+function williamsR(data,p=14){if(data.length<p)return -50;const sl=data.slice(-p);const hi=Math.max(...sl.map(d=>d.high)),lo=Math.min(...sl.map(d=>d.low));const c=data[data.length-1].close;return hi===lo?-50:(hi-c)/(hi-lo)*-100;}
 
 // ═══════════════════════════════════════════════
-// ASYMMETRIC SIGNAL ENGINE
-// mode: 'sell' (보유중) | 'buy' (관심/신규)
+// 조건 필터 기반 분석 엔진 v2
 // ═══════════════════════════════════════════════
 function analyze(data, qty, quote, mode, analyst=null) {
   const closes=data.map(d=>d.close);
-  const price=(quote?.price)||data[data.length-1].close;
-  const ma20=sma(closes,20), lma20=ma20[ma20.length-1];
-  const ma50=sma(closes,50), lma50=ma50[ma50.length-1];
+  const price=(quote?.price)||closes[closes.length-1];
+  const n=data.length;
+  const ma20=sma(closes,20),lma20=ma20[ma20.length-1];
+  const ma50=sma(closes,50),lma50=ma50[ma50.length-1];
   const ma200=sma(closes,200),lma200=ma200[ma200.length-1];
   const e9=ema(closes,9);
   const rsiV=rsi(closes.slice(-30));
@@ -1144,219 +1121,164 @@ function analyze(data, qty, quote, mode, analyst=null) {
   const ml=mc.ln[mc.ln.length-1],ms=mc.sg[mc.sg.length-1];
   const mlP=mc.ln[mc.ln.length-2],msP=mc.sg[mc.sg.length-2];
   const st=stoch(data);
-  const stK=st.k[st.k.length-1],stD=st.d[st.d.length-1];
-  const stKP=st.k[st.k.length-2];
+  const stK=st.k[st.k.length-1],stD=st.d[st.d.length-1],stKP=st.k[st.k.length-2];
   const atrV=atr(data);
-  const srV=sr(data), fibV=fib(data);
+  const srV=sr(data),fibV=fib(data);
   const vols=data.map(d=>d.volume);
   const avgV=sma(vols,20)[vols.length-1]||1;
   const volR=data[data.length-1].volume/avgV;
-  // 모멘텀
-  const rocV  = roc(closes, 12);
-  const mfiV  = mfi(data, 14);
-  const willR = williamsR(data, 14);
 
-  let score=0; const sigs=[];
+  // [1] Trend Filter
+  const adxV=adx(data);
+  const isTrend=adxV.adx>25,isRange=adxV.adx<20;
+  const trendUp=adxV.pdi>adxV.mdi,trendDown=adxV.mdi>adxV.pdi;
+  const marketState=adxV.adx>25?'추세장':adxV.adx<20?'횡보장':'전환중';
 
-  // ── 공통 지표 계산 ──────────────────────────
-  // RSI
-  if(rsiV<=28){score+=3;sigs.push({n:'RSI',v:rsiV.toFixed(1),note:'극과매도',d:1});}
-  else if(rsiV<=38){score+=1.5;sigs.push({n:'RSI',v:rsiV.toFixed(1),note:'과매도',d:1});}
-  else if(rsiV>=75){score-=3;sigs.push({n:'RSI',v:rsiV.toFixed(1),note:'극과매수',d:-1});}
-  else if(rsiV>=65){score-=1.5;sigs.push({n:'RSI',v:rsiV.toFixed(1),note:'과매수',d:-1});}
-  else{sigs.push({n:'RSI',v:rsiV.toFixed(1),note:'중립',d:0});}
+  // [2] Smart Money Filter
+  const obvArr=obv(data);
+  const obvNow=obvArr[obvArr.length-1],obvPrev=obvArr[Math.max(0,obvArr.length-6)];
+  const obvUp=obvNow>obvPrev;
+  const vwapV=vwap(data,20),aboveVwap=price>vwapV;
+  const priceUp5=closes[n-1]>closes[Math.max(0,n-6)];
+  const obvBearDiv=priceUp5&&!obvUp,obvBullDiv=!priceUp5&&obvUp;
+  const volBreakout=volR>=1.5;
 
-  // MACD
-  if(ml&&ms&&mlP&&msP){
-    if(mlP<msP&&ml>ms){score+=2.5;sigs.push({n:'MACD',v:'골든크로스',note:'상향 돌파',d:1});}
-    else if(mlP>msP&&ml<ms){score-=2.5;sigs.push({n:'MACD',v:'데드크로스',note:'하향 돌파',d:-1});}
-    else if(ml>ms){score+=1;sigs.push({n:'MACD',v:'강세',note:'시그널 위',d:1});}
-    else{score-=1;sigs.push({n:'MACD',v:'약세',note:'시그널 아래',d:-1});}
+  // [3] Volatility Filter
+  const bbW=bbWidth(bbA);
+  const bbWVals=bbA.map(b=>b?(b.u-b.l)/b.m:null).filter(v=>v!=null);
+  const avgBbW=bbWVals.slice(-20).reduce((s,v)=>s+v,0)/Math.min(20,bbWVals.length)||0.05;
+  const isSqueeze=bbW<avgBbW*0.7,isExpand=bbW>avgBbW*1.3;
+  const atrPct=atrV/price*100;
+  const lowVol=atrPct<1.5,highVol=atrPct>4.0;
+
+  // [4] Timing
+  const rsiOversold=rsiV<35,rsiOverbought=rsiV>65;
+  const macdBull=ml&&ms&&ml>ms,macdBear=ml&&ms&&ml<ms;
+  const macdCrossUp=ml&&ms&&mlP&&msP&&mlP<msP&&ml>ms;
+  const macdCrossDown=ml&&ms&&mlP&&msP&&mlP>msP&&ml<ms;
+  const stochOversold=stK!==null&&stK<25,stochOverbought=stK!==null&&stK>75;
+  const stochCrossUp=stK!==null&&stKP!==null&&stKP<stD&&stK>stD;
+  const mfiV=mfi(data),willRV=williamsR(data),rocV=roc(closes,12);
+
+  // [5] Sentiment (내부 근사)
+  const fearGreed=Math.round((rsiV*0.25)+((aboveVwap?60:40)*0.25)+((trendUp?65:trendDown?35:50)*0.25)+(mfiV*0.25));
+  const isGreedy=fearGreed>70,isFearful=fearGreed<30;
+
+  // 필터 점수 계산
+  let f1=0;
+  if(isTrend&&trendUp)f1=25;else if(isTrend&&trendDown)f1=-25;else if(!isRange)f1=trendUp?12:-12;
+
+  let f2=0;
+  if(obvBearDiv)f2-=15;else if(obvBullDiv)f2+=15;else if(obvUp&&aboveVwap)f2+=10;else if(!obvUp&&!aboveVwap)f2-=10;else f2+=obvUp?5:-5;
+  if(volBreakout&&aboveVwap)f2+=5;else if(volBreakout&&!aboveVwap)f2-=5;
+  f2=Math.max(-20,Math.min(20,f2));
+
+  let f3=0;
+  if(isSqueeze)f3=aboveVwap&&trendUp?12:!aboveVwap&&trendDown?-12:0;
+  else if(isExpand)f3=trendUp?8:trendDown?-8:0;
+  if(lowVol&&isSqueeze)f3=Math.round(f3*1.5);
+  f3=Math.max(-15,Math.min(15,f3));
+
+  let f4=0;
+  const rsiConfirmed=(f1+f2)!==0;
+  if(rsiConfirmed){if(rsiOversold)f4+=8;if(rsiOverbought)f4-=8;}
+  if(macdCrossUp)f4+=10;else if(macdCrossDown)f4-=10;else if(macdBull)f4+=4;else if(macdBear)f4-=4;
+  if(stochCrossUp&&stochOversold)f4+=7;else if(stochOversold)f4+=3;else if(stochOverbought)f4-=3;
+  if(willRV<=-80)f4+=4;else if(willRV>=-20)f4-=4;
+  f4=Math.max(-25,Math.min(25,f4));
+
+  let f5=0;
+  if(isGreedy&&mode==='buy')f5=-8;if(isFearful&&mode==='buy')f5=8;
+  if(isGreedy&&mode==='sell')f5=5;if(isFearful&&mode==='sell')f5=-5;
+
+  let f6=0;
+  if(analyst?.targetMean&&price>0){
+    const up=(analyst.targetMean-price)/price;
+    f6=up>=0.20?5:up>=0.10?3:up>=0?1:up>=-0.10?-1:up>=-0.20?-3:-5;
+    if(analyst.recMean){const rm=analyst.recMean;f6+=rm<=1.5?2:rm<=2.5?1:rm>=4?-2:rm>=3.5?-1:0;}
+    f6=Math.max(-5,Math.min(5,f6));
   }
 
-  // BB
-  if(bbL){
-    if(price<bbL.l){score+=2.5;sigs.push({n:'볼린저',v:'하단 이탈',note:'$'+bbL.l.toFixed(2),d:1});}
-    else if(price>bbL.u){score-=2.5;sigs.push({n:'볼린저',v:'상단 돌파',note:'$'+bbL.u.toFixed(2),d:-1});}
-    else if(price<bbL.m){score+=0.5;sigs.push({n:'볼린저',v:'중간선 아래',note:'중립↑',d:0});}
-    else{score-=0.5;sigs.push({n:'볼린저',v:'중간선 위',note:'중립↓',d:0});}
+  const rawScore=f1+f2+f3+f4+f5+f6;
+
+  // [7] Risk Management
+  const buyTgt=Math.max(price*(1-atrV*1.5/price),srV.sup);
+  const buyGoal=buyTgt*(1+atrV*3/buyTgt);
+  const buyStop=buyTgt-atrV*2;
+  const rrBuy=buyGoal>buyTgt?(buyGoal-buyTgt)/(buyTgt-buyStop||1):0;
+  const sellTgt=mode==='sell'?Math.min(price*(1+atrV*0.5/price),srV.res):price*(1+atrV/price);
+  const sellStop=price-atrV*2;
+  const rrSell=sellTgt>price?(sellTgt-price)/(price-sellStop||1):0;
+  const rrPenalty=(mode==='buy'&&rrBuy<1.5)?-8:(mode==='sell'&&rrSell<1.5)?-5:0;
+  const adjustedScore=rawScore+rrPenalty;
+  const confidence=Math.round(Math.min(100,Math.max(0,50+adjustedScore*0.5)));
+
+  // 매도 수량
+  function calcSellQty(qty,s){if(!qty)return 0;const p=s<=-45?0.70:s<=-35?0.50:s<=-28?0.40:s<=-20?0.30:s<=-12?0.20:s<=-6?0.10:0;return p?Math.max(1,Math.round(qty*p)):0;}
+  const sellQty=calcSellQty(qty,adjustedScore);
+  const sellPctLabel=adjustedScore<=-45?'70%':adjustedScore<=-35?'50%':adjustedScore<=-28?'40%':adjustedScore<=-20?'30%':adjustedScore<=-12?'20%':adjustedScore<=-6?'10%':'0%';
+
+  // 시그널 결정
+  let action,recommend,note;
+  const S=adjustedScore;
+  if(mode==='sell'){
+    if(S<=-40){action='SELL';recommend='sell';note=`강한 매도 · ${isTrend?'추세장 하락':'과매수 반전'} · 신뢰도 ${confidence}`;}
+    else if(S<=-25){action='SELL';recommend='sell';note=`매도 권장 · ${obvBearDiv?'OBV 다이버전스':'모멘텀 약화'} · 신뢰도 ${confidence}`;}
+    else if(S<=-12){action='SELL';recommend='sell';note=`부분 매도 · 리스크 관리 · 신뢰도 ${confidence}`;}
+    else if(S>=20){action='HOLD';recommend='hold';note=`추세 강세 · 홀드 유지 · 신뢰도 ${confidence}`;}
+    else{action='WAIT';recommend='hold';note=`신호 불분명 · ${marketState} 관망 · 신뢰도 ${confidence}`;}
+  }else{
+    if(S>=35){action='BUY';recommend='buy';note=`강한 매수 · ${isTrend&&trendUp?'추세 추종':isSqueeze?'Squeeze 돌파':'반등'} · 신뢰도 ${confidence}`;}
+    else if(S>=18){action='BUY';recommend='buy';note=`매수 가능 · ${obvBullDiv?'OBV 강세 다이버전스':'모멘텀 상승'} · 신뢰도 ${confidence}`;}
+    else if(S<=-20){action='WAIT';recommend='wait';note=`하락중 · 지지선 대기 · 신뢰도 ${confidence}`;}
+    else{action='WAIT';recommend='wait';note=`${marketState} · 조건 미충족 · 신뢰도 ${confidence}`;}
   }
 
-  // MA배열
-  if(lma20&&lma50){
-    if(price>lma20&&lma20>lma50){score+=2;sigs.push({n:'MA배열',v:'정배열',note:'강세 추세',d:1});}
-    else if(price<lma20&&lma20<lma50){score-=2;sigs.push({n:'MA배열',v:'역배열',note:'약세 추세',d:-1});}
-    else{sigs.push({n:'MA배열',v:'혼조',note:'방향 탐색',d:0});}
-  }
-  if(lma200){
-    if(price>lma200){score+=1;sigs.push({n:'MA200',v:'$'+lma200.toFixed(2),note:'장기선 위',d:1});}
-    else{score-=1;sigs.push({n:'MA200',v:'$'+lma200.toFixed(2),note:'장기선 아래',d:-1});}
-  }
+  const obvDivLabel=obvBearDiv?'약세 다이버전스':obvBullDiv?'강세 다이버전스':obvUp?'OBV 상승':'OBV 하락';
+  const sigs=[
+    {n:'추세 (ADX)',v:`${adxV.adx.toFixed(0)}`,note:`${marketState} · ${trendUp?'상승↑':'하락↓'}`,d:trendUp?1:trendDown?-1:0},
+    {n:'OBV',v:obvBearDiv?'약세다이버전스':obvBullDiv?'강세다이버전스':obvUp?'상승':'하락',note:`VWAP $${vwapV.toFixed(1)} ${aboveVwap?'위':'아래'}`,d:f2>0?1:f2<0?-1:0},
+    {n:'변동성',v:isSqueeze?'Squeeze':isExpand?'확장':'중립',note:`ATR ${atrPct.toFixed(1)}% · BBW ${(bbW*100).toFixed(1)}%`,d:f3>0?1:f3<0?-1:0},
+    {n:'RSI',v:rsiV.toFixed(0),note:rsiOversold?'과매도':rsiOverbought?'과매수':'중립',d:rsiOversold?1:rsiOverbought?-1:0},
+    {n:'MACD',v:macdCrossUp?'골든X':macdCrossDown?'데드X':macdBull?'강세':'약세',note:`히스토그램 ${mc.hist[mc.hist.length-1]?.toFixed(3)||'—'}`,d:macdBull?1:macdBear?-1:0},
+    {n:'스토캐스틱',v:stK?.toFixed(0)||'—',note:stochOversold?'과매도':stochOverbought?'과매수':'중립',d:stochOversold?1:stochOverbought?-1:0},
+    {n:'MFI',v:mfiV.toFixed(0),note:mfiV>=80?'자금 과매수':mfiV<=20?'자금 과매도':'중립',d:mfiV<=35?1:mfiV>=65?-1:0},
+    {n:'Williams %R',v:willRV.toFixed(0),note:willRV<=-80?'과매도':willRV>=-20?'과매수':'중립',d:willRV<=-80?1:willRV>=-20?-1:0},
+    {n:'ROC(12)',v:(rocV>0?'+':'')+rocV.toFixed(1)+'%',note:rocV>10?'과열':rocV<-10?'급락':'중립',d:rocV<-5?1:rocV>5?-1:0},
+    {n:'거래량',v:volR.toFixed(1)+'x',note:volBreakout?'돌파 거래량':'평균',d:volBreakout&&aboveVwap?1:volBreakout&&!aboveVwap?-1:0},
+    {n:'지지/저항',v:`R $${srV.res.toFixed(1)} / S $${srV.sup.toFixed(1)}`,note:`피벗 $${srV.piv.toFixed(1)}`,d:(price-srV.sup)/(srV.res-srV.sup||1)>0.7?-1:(price-srV.sup)/(srV.res-srV.sup||1)<0.3?1:0},
+    {n:'감성지수',v:fearGreed.toString(),note:isGreedy?'탐욕':isFearful?'공포':'중립',d:isFearful?1:isGreedy?-1:0},
+  ];
+  if(analyst?.targetMean)sigs.push({n:'애널리스트',v:`목표 $${analyst.targetMean.toFixed(0)}`,note:`${((analyst.targetMean-price)/price*100).toFixed(1)}% · ${analyst.numAnalysts}명`,d:f6>0?1:f6<0?-1:0});
 
-  // Stoch
-  if(stK!==null&&stD!==null){
-    if(stK<20&&stD<20){score+=2;sigs.push({n:'스토캐스틱',v:stK.toFixed(1),note:'과매도',d:1});}
-    else if(stK>80&&stD>80){score-=2;sigs.push({n:'스토캐스틱',v:stK.toFixed(1),note:'과매수',d:-1});}
-    else if(stKP!==null&&stKP<stD&&stK>stD&&stK<50){score+=1.5;sigs.push({n:'스토캐스틱',v:stK.toFixed(1),note:'저점 반등',d:1});}
-    else{sigs.push({n:'스토캐스틱',v:stK.toFixed(1),note:'중립',d:0});}
-  }
+  const filters={
+    trend:{score:f1,label:`ADX ${adxV.adx.toFixed(1)} · ${marketState}`,dir:f1>0?1:f1<0?-1:0},
+    smartMoney:{score:f2,label:`${obvDivLabel} · VWAP ${aboveVwap?'위':'아래'}`,dir:f2>0?1:f2<0?-1:0},
+    volatility:{score:f3,label:isSqueeze?`Squeeze (BBW ${(bbW*100).toFixed(1)}%)`:isExpand?`변동성 확장`:`중립 (ATR ${atrPct.toFixed(1)}%)`,dir:f3>0?1:f3<0?-1:0},
+    timing:{score:f4,label:`RSI ${rsiV.toFixed(0)} · MACD ${macdCrossUp?'골든X':macdCrossDown?'데드X':macdBull?'강세':'약세'}`,dir:f4>0?1:f4<0?-1:0},
+    sentiment:{score:f5,label:`감성 ${fearGreed} (${isGreedy?'탐욕':isFearful?'공포':'중립'})`,dir:f5>0?1:f5<0?-1:0},
+    analyst:{score:f6,label:analyst?.targetMean?`목표가 $${analyst.targetMean.toFixed(0)}`:' 데이터없음',dir:f6>0?1:f6<0?-1:0},
+  };
 
-  // Volume
-  if(volR>2){score+=(score>0?1.5:-1.5);sigs.push({n:'거래량',v:volR.toFixed(1)+'x',note:'급증',d:score>0?1:-1});}
-  else if(volR>1.4){sigs.push({n:'거래량',v:volR.toFixed(1)+'x',note:'증가',d:0});}
-  else{sigs.push({n:'거래량',v:volR.toFixed(1)+'x',note:'평균',d:0});}
-
-  // S/R
-  const dSup=(price-srV.sup)/price, dRes=(srV.res-price)/price;
-  if(dSup<0.02){score+=1.5;sigs.push({n:'지지선',v:'$'+srV.sup.toFixed(2),note:'2% 이내',d:1});}
-  if(dRes<0.015){score-=1.5;sigs.push({n:'저항선',v:'$'+srV.res.toFixed(2),note:'1.5% 이내',d:-1});}
-
-  // Fib
-  for(const [lv,nm] of [[fibV.r618,'Fib 61.8%'],[fibV.r500,'Fib 50%'],[fibV.r382,'Fib 38.2%']]){
-    if(Math.abs(price-lv)/price<0.015){score+=(price>lv?-0.5:1);sigs.push({n:nm,v:'$'+lv.toFixed(2),note:'근접',d:price>lv?0:1});break;}
-  }
-
-  // ── 모멘텀 지표 ────────────────────────────
-  // ROC (12일)
-  if      (rocV > 10) { score -= 1.5; sigs.push({n:'ROC',  v:'+'+rocV.toFixed(1)+'%', note:'과열 급등', d:-1}); }
-  else if (rocV > 5)  { score -= 0.5; sigs.push({n:'ROC',  v:'+'+rocV.toFixed(1)+'%', note:'상승 모멘텀', d:-1}); }
-  else if (rocV < -10){ score += 1.5; sigs.push({n:'ROC',  v:rocV.toFixed(1)+'%',     note:'과매도 급락', d:1}); }
-  else if (rocV < -5) { score += 0.5; sigs.push({n:'ROC',  v:rocV.toFixed(1)+'%',     note:'하락 모멘텀', d:1}); }
-  else                {               sigs.push({n:'ROC',  v:rocV.toFixed(1)+'%',     note:'중립',        d:0}); }
-
-  // MFI (14일) — 거래량 가중 RSI
-  if      (mfiV >= 80) { score -= 1.5; sigs.push({n:'MFI', v:mfiV.toFixed(1), note:'자금 과매수',  d:-1}); }
-  else if (mfiV >= 65) { score -= 0.5; sigs.push({n:'MFI', v:mfiV.toFixed(1), note:'자금 유입 강', d:-1}); }
-  else if (mfiV <= 20) { score += 1.5; sigs.push({n:'MFI', v:mfiV.toFixed(1), note:'자금 과매도',  d:1}); }
-  else if (mfiV <= 35) { score += 0.5; sigs.push({n:'MFI', v:mfiV.toFixed(1), note:'자금 유출 강', d:1}); }
-  else                 {               sigs.push({n:'MFI', v:mfiV.toFixed(1), note:'중립',          d:0}); }
-
-  // Williams %R (14일)
-  if      (willR >= -10) { score -= 1.5; sigs.push({n:'Williams %R', v:willR.toFixed(1), note:'극과매수', d:-1}); }
-  else if (willR >= -20) { score -= 0.5; sigs.push({n:'Williams %R', v:willR.toFixed(1), note:'과매수',   d:-1}); }
-  else if (willR <= -90) { score += 1.5; sigs.push({n:'Williams %R', v:willR.toFixed(1), note:'극과매도', d:1}); }
-  else if (willR <= -80) { score += 0.5; sigs.push({n:'Williams %R', v:willR.toFixed(1), note:'과매도',   d:1}); }
-  else                   {               sigs.push({n:'Williams %R', v:willR.toFixed(1), note:'중립',      d:0}); }
-
-  // ── 비대칭 가중치 보정 ──────────────────────
-  // 보유중(매도 관점): 추세 지속·과매수 탈출에 더 민감
-  // 관심(매수 관점): 반등 확인·지지선 안착에 더 민감
-  let adjustedScore = score;
-
-  if (mode === 'sell') {
-    // 매도 관점: 약한 매도 신호도 빠르게 반응 (임계값 낮춤)
-    // MACD 데드크로스 가중치 +20%
-    // 과매수 RSI 가중치 +20%
-    // 정배열이어도 고점이면 부분매도 권장
-    if (ml&&ms&&ml<ms) adjustedScore -= 0.5; // 추가 패널티
-    if (rsiV>=60) adjustedScore -= 0.5;
-    if (price>srV.res*0.98) adjustedScore -= 0.5;
-  } else {
-    // 매수 관점: 확실한 신호일 때만 진입 (임계값 높임)
-    // 반등 확인 추가 요구: BB하단 + RSI과매도 동시에야 강한 신호
-    // 단순 RSI과매도만으로는 부족 → 추가 검증
-    if (rsiV<40 && bbL && price<bbL.l) adjustedScore += 0.5; // 동시 충족 보너스
-    if (rsiV<40 && lma20 && price<lma20) adjustedScore -= 0.3; // 추세 아직 약함
-    if (stK!==null&&stKP!==null&&stK>stD&&stKP<stD&&stK<40) adjustedScore += 0.5; // 저점 스토캐 크로스
-  }
-
-  // ── 애널리스트 목표가 반영 ──────────────────
-  let analystScore = 0;
-  if (analyst?.targetMean && price > 0) {
-    const upside = (analyst.targetMean - price) / price; // 상승여력
-    // 상승여력 +20% 이상 → +2점, +10% → +1점, -10% → -1점, -20% 이하 → -2점
-    if      (upside >= 0.20) analystScore = 2;
-    else if (upside >= 0.10) analystScore = 1;
-    else if (upside >= 0.00) analystScore = 0.5;
-    else if (upside >= -0.10) analystScore = -0.5;
-    else if (upside >= -0.20) analystScore = -1;
-    else                       analystScore = -2;
-    // 애널리스트 컨센서스 (recMean: 1=강매수, 5=강매도)
-    if (analyst.recMean) {
-      const rm = analyst.recMean;
-      if      (rm <= 1.5) analystScore += 1;
-      else if (rm <= 2.5) analystScore += 0.5;
-      else if (rm >= 4.0) analystScore -= 1;
-      else if (rm >= 3.5) analystScore -= 0.5;
-    }
-    adjustedScore += analystScore;
-    sigs.push({
-      n:'애널리스트',
-      v: `목표 $${analyst.targetMean.toFixed(0)}`,
-      note: `상승여력 ${(upside*100).toFixed(1)}% · ${analyst.numAnalysts}명`,
-      d: analystScore > 0 ? 1 : analystScore < 0 ? -1 : 0
-    });
-  }
-
-  // ── 결정 ────────────────────────────────────
-  const maxS=20;
-  const pctBull=Math.min(100,Math.max(0,(adjustedScore+maxS/2)/maxS*100));
-
-  // 항상 매도·매수 타점 둘 다 계산
-  // 매수 타점
-  const buyTgt  = adjustedScore >= 0
-    ? price
-    : Math.max(price*(1-atrV*2/price), srV.sup);
-  const buyGoal = buyTgt * (1 + Math.min(0.07, atrV/price*3));
-  const buyStop = buyTgt * (1 - atrV*2/buyTgt);
-
-  // 매도 수량 — 점수에 따라 6단계로 세분화
-  function calcSellQty(qty, score) {
-    if (!qty) return 0;
-    let pct = 0;
-    if      (score <= -4.5) pct = 0.70;  // 70% — 매우 강한 매도
-    else if (score <= -3.5) pct = 0.50;  // 50% — 강한 매도
-    else if (score <= -3.0) pct = 0.40;  // 40%
-    else if (score <= -2.5) pct = 0.30;  // 30%
-    else if (score <= -2.0) pct = 0.20;  // 20%
-    else if (score <= -1.5) pct = 0.10;  // 10% — 가벼운 일부 실현
-    return Math.max(1, Math.round(qty * pct));
-  }
-
-  const sellQty = calcSellQty(qty, adjustedScore);
-  const sellPctLabel = adjustedScore <= -4.5 ? '70%'
-    : adjustedScore <= -3.5 ? '50%'
-    : adjustedScore <= -3.0 ? '40%'
-    : adjustedScore <= -2.5 ? '30%'
-    : adjustedScore <= -2.0 ? '20%'
-    : adjustedScore <= -1.5 ? '10%' : '0%';
-
-  const sellTgt = adjustedScore <= -3.5
-    ? price*(1+0.005)
-    : adjustedScore <= -1.5
-    ? price*(1+0.008)
-    : Math.min(price*(1+Math.min(0.06,atrV/price*2.5)), srV.res*0.99);
-  const sellStop = price*(1-atrV*2/price);
-
-  // 추천 방향 결정
-  let action, recommend, note='';
-  if (mode === 'sell') {
-    if      (adjustedScore<=-4.5){ action='SELL'; recommend='sell'; note=`강한 매도 · ${sellPctLabel} 매도 추천`; }
-    else if (adjustedScore<=-3.5){ action='SELL'; recommend='sell'; note=`매도 추천 · ${sellPctLabel} 익절`; }
-    else if (adjustedScore<=-3.0){ action='SELL'; recommend='sell'; note=`부분 매도 · ${sellPctLabel} 권장`; }
-    else if (adjustedScore<=-2.5){ action='SELL'; recommend='sell'; note=`약한 매도 신호 · ${sellPctLabel} 일부 실현`; }
-    else if (adjustedScore<=-2.0){ action='SELL'; recommend='sell'; note=`소량 매도 · ${sellPctLabel} 리스크 관리`; }
-    else if (adjustedScore<=-1.5){ action='SELL'; recommend='sell'; note=`미세 조정 · ${sellPctLabel} 가볍게 실현`; }
-    else if (adjustedScore>=3)   { action='HOLD'; recommend='hold'; note='추세 강세 · 홀드 추천'; }
-    else                         { action='WAIT'; recommend='hold'; note='신호 불분명 · 관망 유지'; }
-  } else {
-    if      (adjustedScore>=4.5) { action='BUY';  recommend='buy';  note='강한 매수 타점 · 매수 추천'; }
-    else if (adjustedScore>=2)   { action='BUY';  recommend='buy';  note='매수 타점 형성 · 소량 진입 가능'; }
-    else if (adjustedScore<=-2)  { action='WAIT'; recommend='wait'; note='하락 중 · 지지선 확인 후 진입'; }
-    else                         { action='WAIT'; recommend='wait'; note='신호 불분명 · 눌림목 대기'; }
-  }
-
-  return {action,recommend,score:adjustedScore,rawScore:score,pctBull,sigs,mode,note,
+  const pctBull=confidence;
+  return {
+    action,recommend,score:adjustedScore,rawScore,pctBull,confidence,
+    marketState,isTrend,isRange,isSqueeze,
+    filters,sigs,mode,note,
     sellTgt,sellQty,sellPctLabel,sellStop,
-    buyTgt,buyGoal,buyStop,
-    rsiV,bbL,bbA,srV,fibV,atrV,
+    buyTgt,buyGoal,buyStop,rrBuy:rrBuy.toFixed(1),rrSell:rrSell.toFixed(1),
+    rsiV,bbL,bbA,srV,fibV,atrV,vwapV,
     lma20,lma50,lma200,ma20,ma50,e9,
     ml,ms,stK,stD,volR,price,
-    latest:data[data.length-1]};
+    adxV,obvBullDiv,obvBearDiv,fearGreed,
+    latest:data[data.length-1]
+  };
 }
 
 // ═══════════════════════════════════════════════
 // RUN ALL
+
+
 // ═══════════════════════════════════════════════
 async function runAll() {
   const allItems = [
@@ -1491,8 +1413,42 @@ function renderAnalysis(ticker) {
     <div class="hero ${heroClass}">
       <div class="hero-act">${recLabel}</div>
       <div class="hero-sub">${r.note}</div>
-      <div class="hero-sub" style="margin-top:4px;">종합 점수 ${r.score>0?'+':''}${r.score.toFixed(1)} · 매수 강도 ${r.pctBull.toFixed(0)}%</div>
-      <div class="str-bar"><div class="str-fill" style="width:${r.pctBull}%;background:${barColor};"></div></div>
+      <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;">
+        <span style="font-size:11px;background:rgba(255,255,255,.08);padding:3px 8px;border-radius:6px;">
+          📊 ${r.marketState}
+        </span>
+        <span style="font-size:11px;background:rgba(255,255,255,.08);padding:3px 8px;border-radius:6px;">
+          신뢰도 ${r.confidence}/100
+        </span>
+        ${r.isSqueeze?'<span style="font-size:11px;background:rgba(255,214,0,.2);color:var(--yellow);padding:3px 8px;border-radius:6px;">⚡ BB Squeeze</span>':''}
+      </div>
+      <div class="str-bar" style="margin-top:10px;"><div class="str-fill" style="width:${r.pctBull}%;background:${barColor};"></div></div>
+    </div>
+
+    <!-- 필터 점수판 -->
+    <div class="sec">🔬 필터 분석</div>
+    <div class="itbl">
+      ${Object.entries(r.filters||{}).map(([k,f])=>{
+        const label={trend:'[1] 추세',smartMoney:'[2] 스마트머니',volatility:'[3] 변동성',timing:'[4] 타이밍',sentiment:'[5] 감성',analyst:'[6] 애널리스트'}[k]||k;
+        const bar=Math.abs(f.score);
+        const color=f.dir>0?'var(--green)':f.dir<0?'var(--red)':'var(--t4)';
+        return `<div class="idrow">
+          <div class="idl">
+            <div class="idn" style="font-size:12px;">${label}</div>
+            <div class="idd">${f.label}</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;">
+            <div style="width:40px;height:4px;background:var(--border);border-radius:2px;">
+              <div style="width:${Math.min(100,bar/25*100)}%;height:100%;background:${color};border-radius:2px;"></div>
+            </div>
+            <div class="idv ${f.dir>0?'b':f.dir<0?'r':'n'}" style="min-width:30px;text-align:right;">${f.score>0?'+':''}${f.score}</div>
+          </div>
+        </div>`;
+      }).join('')}
+      <div class="idrow" style="background:var(--bg2);">
+        <div class="idl"><div class="idn" style="font-weight:700;">종합 점수</div></div>
+        <div class="idv ${r.score>=0?'b':'r'}" style="font-size:16px;">${r.score>0?'+':''}${r.score}</div>
+      </div>
     </div>
 
     <div class="sec">🔴 매도 타점</div>
