@@ -1894,17 +1894,19 @@ async function loadCalendar(ticker) {
   const el = document.getElementById('calSection');
   el.innerHTML = '<div class="news-loading">📅 일정 불러오는 중...</div>';
   try {
-    // Finnhub: 어닝, 기본정보 병렬 fetch (배당은 무료플랜 제한으로 제외)
-    const [earningsData, basicData, companyData] = await Promise.all([
+    // 병렬로 한번에 fetch
+    const today = new Date().toISOString().slice(0,10);
+    const from3y = new Date(Date.now() - 3*365*24*60*60*1000).toISOString().slice(0,10);
+    const [earningsData, basicData, dividendData] = await Promise.all([
       finnhub(`/stock/earnings?symbol=${ticker}`),
       finnhub(`/stock/metric?symbol=${ticker}&metric=all`),
-      finnhub(`/stock/profile2?symbol=${ticker}`)
+      finnhub(`/stock/dividend?symbol=${ticker}&from=${from3y}&to=${today}`).catch(()=>null)
     ]);
 
     const events = [];
     const now = new Date();
 
-    // 어닝 (최근 4분기 + 예정)
+    // 어닝 (최근 4분기)
     if (Array.isArray(earningsData)) {
       earningsData.slice(0, 6).forEach(e => {
         if (!e.period) return;
@@ -1921,46 +1923,40 @@ async function loadCalendar(ticker) {
     // Key Stats + 배당 정보
     const m = basicData?.metric || {};
 
-    // Yahoo Finance에서 배당락일 정확한 날짜/시간 가져오기
-    try {
-      const yUrl = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${ticker}?modules=summaryDetail%2CcalendarEvents`;
-      const yData = await fetchJSON(yUrl);
-      const detail = yData?.quoteSummary?.result?.[0]?.summaryDetail;
-      const cal    = yData?.quoteSummary?.result?.[0]?.calendarEvents;
+    // Finnhub 배당 데이터 (이미 병렬로 가져옴)
+    if (Array.isArray(dividendData) && dividendData.length > 0) {
+      // 최근 배당 이력 (최대 4개)
+      const recentDivs = dividendData
+        .sort((a,b) => new Date(b.exDate||b.date) - new Date(a.exDate||a.date))
+        .slice(0, 4);
 
-      if (detail?.exDividendDate?.raw) {
-        const exDate = new Date(detail.exDividendDate.raw * 1000);
-        const koTime = exDate.toLocaleString('ko-KR', {
-          timeZone: 'Asia/Seoul',
-          year:'numeric', month:'2-digit', day:'2-digit',
-          hour:'2-digit', minute:'2-digit', hour12:false
-        });
+      recentDivs.forEach(d => {
+        const exDate = d.exDate || d.date;
+        if (!exDate) return;
+        const date = new Date(exDate);
         events.push({
-          date: exDate,
+          date,
           type: 'div',
           label: '배당락일 (Ex-Dividend)',
-          detail: `${koTime} (한국시간) · 배당금 $${detail.dividendRate?.fmt||'—'} · 수익률 ${detail.dividendYield?.fmt||'—'}`
+          detail: `배당금 $${d.amount?.toFixed(3)||'—'} · 이 날까지 보유해야 배당 수령`
         });
-      }
-      if (cal?.dividendDate?.raw) {
-        const payDate = new Date(cal.dividendDate.raw * 1000);
-        events.push({
-          date: payDate,
-          type: 'div',
-          label: '배당 지급일',
-          detail: `배당금 $${detail?.dividendRate?.fmt||'—'}`
-        });
-      }
-    } catch(e) {
-      // Yahoo 실패 시 metric에서 연간 배당 정보만 표시
-      if (m.dividendPerShareAnnual) {
-        events.push({
-          date: new Date(),
-          type: 'div',
-          label: '배당 정보',
-          detail: `연간 배당금 $${m.dividendPerShareAnnual?.toFixed(3)||'—'} · 수익률 ${m.dividendYieldIndicatedAnnual?.toFixed(2)||'—'}%`
-        });
-      }
+        if (d.payDate) {
+          events.push({
+            date: new Date(d.payDate),
+            type: 'div',
+            label: '배당 지급일',
+            detail: `배당금 $${d.amount?.toFixed(3)||'—'} 지급`
+          });
+        }
+      });
+    } else if (m.dividendPerShareAnnual) {
+      // 배당 이력 없어도 연간 배당 정보는 표시
+      events.push({
+        date: new Date(),
+        type: 'div',
+        label: '배당 정보',
+        detail: `연간 배당금 $${m.dividendPerShareAnnual?.toFixed(3)||'—'} · 수익률 ${m.dividendYieldIndicatedAnnual?.toFixed(2)||'—'}%`
+      });
     }
 
     const infoHtml = (m['52WeekHigh'] || m.epsBasicExclExtraItemsTTM) ? `
