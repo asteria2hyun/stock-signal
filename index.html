@@ -1319,22 +1319,23 @@ async function runAll() {
   ref.classList.add('spin');
   document.getElementById('prog').classList.add('on');
 
-  for (const h of allItems) {
+  // 모든 종목 동시 병렬 분석
+  await Promise.all(allItems.map(async h => {
     try {
       const [quote, hist, analyst] = await Promise.all([
         fetchQuote(h.ticker),
         fetchHistory(h.ticker, currentTF),
         fetchAnalyst(h.ticker)
       ]);
-      if (!hist||hist.length<10) { cache[h.ticker]={error:true}; continue; }
+      if (!hist||hist.length<10) { cache[h.ticker]={error:true}; return; }
       const mode = h.type==='holding' ? 'sell' : 'buy';
       const result = analyze(hist, h.qty||0, quote, mode, analyst);
       cache[h.ticker] = { quote, hist, result, analyst, type:h.type };
     } catch(e) {
       cache[h.ticker]={error:true};
     }
-    renderLists();
-  }
+  }));
+  renderLists();
 
   renderSummary();
   const first=[...holdings,...watchlist][0];
@@ -1895,11 +1896,9 @@ async function loadCalendar(ticker) {
   el.innerHTML = '<div class="news-loading">📅 일정 불러오는 중...</div>';
   try {
     // 병렬로 한번에 fetch
-    const today = new Date().toISOString().slice(0,10);
-    const [earningsData, basicData, yahooData] = await Promise.all([
+    const [earningsData, basicData] = await Promise.all([
       finnhub(`/stock/earnings?symbol=${ticker}`),
-      finnhub(`/stock/metric?symbol=${ticker}&metric=all`),
-      fetchJSON(`https://query1.finance.yahoo.com/v10/finance/quoteSummary/${ticker}?modules=summaryDetail%2CcalendarEvents`).catch(()=>null)
+      finnhub(`/stock/metric?symbol=${ticker}&metric=all`)
     ]);
 
     const events = [];
@@ -1921,35 +1920,31 @@ async function loadCalendar(ticker) {
 
     // Key Stats + 배당 정보
     const m = basicData?.metric || {};
-    const yDetail = yahooData?.quoteSummary?.result?.[0]?.summaryDetail;
-    const yCal    = yahooData?.quoteSummary?.result?.[0]?.calendarEvents;
 
-    // 배당락일 (Yahoo Finance)
-    if (yDetail?.exDividendDate?.raw) {
-      const exDate = new Date(yDetail.exDividendDate.raw * 1000);
-      events.push({
-        date: exDate,
-        type: 'div',
-        label: '배당락일 (Ex-Dividend)',
-        detail: `이 날까지 보유해야 배당 수령 · 배당금 $${yDetail.dividendRate?.fmt||m.dividendPerShareAnnual?.toFixed(2)||'—'} · 수익률 ${yDetail.dividendYield?.fmt||(m.dividendYieldIndicatedAnnual?m.dividendYieldIndicatedAnnual.toFixed(2)+'%':'—')}`
-      });
-    }
-    // 배당 지급일
-    if (yCal?.dividendDate?.raw) {
-      events.push({
-        date: new Date(yCal.dividendDate.raw * 1000),
-        type: 'div',
-        label: '배당 지급일',
-        detail: `배당금 $${yDetail?.dividendRate?.fmt||'—'} 지급`
-      });
-    }
-    // 둘 다 없으면 연간 배당 정보라도
-    if (!yDetail?.exDividendDate?.raw && m.dividendPerShareAnnual) {
+    // 배당락일 — metric의 날짜 필드 활용
+    const exDateTs = m['exDividendDate'] || m['nextDividendDate'] || m['lastDividendDate'];
+    const divAmt   = m['dividendPerShareAnnual'] || m['lastDividendValue'];
+    const divYield = m['dividendYieldIndicatedAnnual'];
+
+    if (exDateTs) {
+      // Unix timestamp 또는 YYYY-MM-DD 문자열 모두 처리
+      const exDate = typeof exDateTs === 'number'
+        ? new Date(exDateTs * 1000)
+        : new Date(exDateTs);
+      if (!isNaN(exDate)) {
+        events.push({
+          date: exDate,
+          type: 'div',
+          label: '배당락일 (Ex-Dividend)',
+          detail: `이 날까지 보유해야 배당 수령 · 배당금 $${divAmt?.toFixed(3)||'—'} · 수익률 ${divYield?.toFixed(2)||'—'}%`
+        });
+      }
+    } else if (divAmt) {
       events.push({
         date: new Date(),
         type: 'div',
         label: '배당 정보',
-        detail: `연간 배당금 $${m.dividendPerShareAnnual?.toFixed(3)||'—'} · 수익률 ${m.dividendYieldIndicatedAnnual?.toFixed(2)||'—'}%`
+        detail: `연간 배당금 $${divAmt?.toFixed(3)||'—'} · 수익률 ${divYield?.toFixed(2)||'—'}%`
       });
     }
 
