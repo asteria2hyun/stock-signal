@@ -1053,8 +1053,11 @@ async function fetchHistory(ticker, tf='1M') {
 
 async function fetchAnalyst(ticker) {
   try {
-    // recommendation은 무료, price-target은 별도 시도
-    const rec = await finnhub(`/stock/recommendation?symbol=${ticker}`);
+    // recommendation + 기본 재무정보 병렬
+    const [rec, basic] = await Promise.all([
+      finnhub(`/stock/recommendation?symbol=${ticker}`),
+      finnhub(`/stock/metric?symbol=${ticker}&metric=price`)
+    ]);
     const latest = Array.isArray(rec) && rec.length > 0 ? rec[0] : null;
     if (!latest) return null;
 
@@ -1064,23 +1067,13 @@ async function fetchAnalyst(ticker) {
     const recMean = ((latest.strongBuy||0)*1+(latest.buy||0)*2+(latest.hold||0)*3+(latest.sell||0)*4+(latest.strongSell||0)*5)/total;
     const recKey  = recMean<=1.5?'strongBuy':recMean<=2.5?'buy':recMean<=3.5?'hold':recMean<=4.5?'sell':'strongSell';
 
-    let targetMean=null, targetHigh=null, targetLow=null, numAnalysts=total;
-    // Yahoo Finance에서 목표가 가져오기 (무료)
-    try {
-      const yUrl = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${ticker}?modules=financialData`;
-      const yData = await fetchJSON(yUrl);
-      const fin = yData?.quoteSummary?.result?.[0]?.financialData;
-      if (fin?.targetMeanPrice?.raw) {
-        targetMean  = fin.targetMeanPrice.raw;
-        targetHigh  = fin.targetHighPrice?.raw || null;
-        targetLow   = fin.targetLowPrice?.raw  || null;
-        numAnalysts = fin.numberOfAnalystOpinions?.raw || total;
-      }
-    } catch(e) {}
+    // Finnhub metric에서 목표가 추출 시도
+    const m = basic?.metric || {};
+    const targetMean = m['targetPrice'] || m['priceTarget'] || null;
 
     return {
-      targetMean, targetHigh, targetLow, targetMedian: targetMean,
-      numAnalysts, recKey, recMean,
+      targetMean, targetHigh: null, targetLow: null, targetMedian: targetMean,
+      numAnalysts: total, recKey, recMean,
       strongBuy:  latest.strongBuy  || 0,
       buy:        latest.buy        || 0,
       hold:       latest.hold       || 0,
@@ -1473,18 +1466,16 @@ function renderAnalysis(ticker) {
     ${analyst ? `
     <div class="sec">📊 애널리스트 컨센서스</div>
     <div class="itbl">
+      ${analyst.targetMean ? `
       <div class="irow">
         <span class="il">평균 목표가</span>
         <span class="iv ${analyst.targetMean>r.price?'g':'r'}">
-          $${analyst.targetMean?.toFixed(2)||'—'}
+          $${analyst.targetMean.toFixed(2)}
           <span style="font-size:11px;color:var(--t4);margin-left:6px;">
-            ${analyst.targetMean ? ((analyst.targetMean-r.price)/r.price*100).toFixed(1)+'%' : ''}
+            ${((analyst.targetMean-r.price)/r.price*100).toFixed(1)}%
           </span>
         </span>
-      </div>
-      <div class="irow"><span class="il">최고 목표가</span><span class="iv g">$${analyst.targetHigh?.toFixed(2)||'—'}</span></div>
-      <div class="irow"><span class="il">최저 목표가</span><span class="iv r">$${analyst.targetLow?.toFixed(2)||'—'}</span></div>
-      <div class="irow"><span class="il">중간값</span><span class="iv">$${analyst.targetMedian?.toFixed(2)||'—'}</span></div>
+      </div>` : ''}
       <div class="irow"><span class="il">참여 애널리스트</span><span class="iv">${analyst.numAnalysts}명</span></div>
       <div class="irow">
         <span class="il">컨센서스</span>
@@ -1493,12 +1484,12 @@ function renderAnalysis(ticker) {
         </span>
       </div>
     </div>
-    <div style="display:flex;gap:4px;margin-bottom:12px;border-radius:10px;overflow:hidden;">
-      ${analyst.strongBuy?`<div style="flex:${analyst.strongBuy};background:var(--green);height:8px;" title="강력매수 ${analyst.strongBuy}"></div>`:''}
-      ${analyst.buy?`<div style="flex:${analyst.buy};background:rgba(0,209,122,0.5);height:8px;" title="매수 ${analyst.buy}"></div>`:''}
-      ${analyst.hold?`<div style="flex:${analyst.hold};background:var(--yellow);height:8px;" title="보유 ${analyst.hold}"></div>`:''}
-      ${analyst.sell?`<div style="flex:${analyst.sell};background:rgba(255,61,90,0.5);height:8px;" title="매도 ${analyst.sell}"></div>`:''}
-      ${analyst.strongSell?`<div style="flex:${analyst.strongSell};background:var(--red);height:8px;" title="강력매도 ${analyst.strongSell}"></div>`:''}
+    <div style="display:flex;gap:4px;margin-bottom:4px;border-radius:10px;overflow:hidden;">
+      ${analyst.strongBuy?`<div style="flex:${analyst.strongBuy};background:var(--green);height:8px;"></div>`:''}
+      ${analyst.buy?`<div style="flex:${analyst.buy};background:rgba(0,209,122,0.5);height:8px;"></div>`:''}
+      ${analyst.hold?`<div style="flex:${analyst.hold};background:var(--yellow);height:8px;"></div>`:''}
+      ${analyst.sell?`<div style="flex:${analyst.sell};background:rgba(255,61,90,0.5);height:8px;"></div>`:''}
+      ${analyst.strongSell?`<div style="flex:${analyst.strongSell};background:var(--red);height:8px;"></div>`:''}
     </div>
     <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--t4);margin-bottom:12px;padding:0 2px;">
       <span>🟢 강매수 ${analyst.strongBuy} · 매수 ${analyst.buy}</span>
@@ -1920,31 +1911,16 @@ async function loadCalendar(ticker) {
 
     // Key Stats + 배당 정보
     const m = basicData?.metric || {};
-
-    // 배당락일 — metric의 날짜 필드 활용
-    const exDateTs = m['exDividendDate'] || m['nextDividendDate'] || m['lastDividendDate'];
     const divAmt   = m['dividendPerShareAnnual'] || m['lastDividendValue'];
     const divYield = m['dividendYieldIndicatedAnnual'];
 
-    if (exDateTs) {
-      // Unix timestamp 또는 YYYY-MM-DD 문자열 모두 처리
-      const exDate = typeof exDateTs === 'number'
-        ? new Date(exDateTs * 1000)
-        : new Date(exDateTs);
-      if (!isNaN(exDate)) {
-        events.push({
-          date: exDate,
-          type: 'div',
-          label: '배당락일 (Ex-Dividend)',
-          detail: `이 날까지 보유해야 배당 수령 · 배당금 $${divAmt?.toFixed(3)||'—'} · 수익률 ${divYield?.toFixed(2)||'—'}%`
-        });
-      }
-    } else if (divAmt) {
+    // 배당 지급 종목이면 연간 배당 정보 표시
+    if (divAmt && divAmt > 0) {
       events.push({
         date: new Date(),
         type: 'div',
-        label: '배당 정보',
-        detail: `연간 배당금 $${divAmt?.toFixed(3)||'—'} · 수익률 ${divYield?.toFixed(2)||'—'}%`
+        label: '💰 배당 정보',
+        detail: `연간 배당금 $${divAmt.toFixed(3)} · 수익률 ${divYield?.toFixed(2)||'—'}%`
       });
     }
 
