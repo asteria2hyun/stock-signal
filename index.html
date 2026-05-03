@@ -1887,9 +1887,10 @@ async function loadCalendar(ticker) {
   el.innerHTML = '<div class="news-loading">📅 일정 불러오는 중...</div>';
   try {
     // 병렬로 한번에 fetch
-    const [earningsData, basicData] = await Promise.all([
+    const [earningsData, basicData, optData] = await Promise.all([
       finnhub(`/stock/earnings?symbol=${ticker}`),
-      finnhub(`/stock/metric?symbol=${ticker}&metric=all`)
+      finnhub(`/stock/metric?symbol=${ticker}&metric=all`),
+      fetchJSON(`https://query1.finance.yahoo.com/v7/finance/options/${ticker}`).catch(()=>null)
     ]);
 
     const events = [];
@@ -1914,13 +1915,39 @@ async function loadCalendar(ticker) {
     const divAmt   = m['dividendPerShareAnnual'] || m['lastDividendValue'];
     const divYield = m['dividendYieldIndicatedAnnual'];
 
-    // 배당 지급 종목이면 연간 배당 정보 표시
-    if (divAmt && divAmt > 0) {
+    // Yahoo v7 options meta에서 공시된 다음 배당락일 추출
+    const optMeta = optData?.optionChain?.result?.[0]?.quote;
+    const exDivTs      = optMeta?.exDividendDate;       // 다음 배당락일 (unix)
+    const divPerShare  = optMeta?.trailingAnnualDividendRate; // 연간 배당금
+    const fwdDivRate   = optMeta?.dividendRate;         // 선언된 분기 배당금×빈도
+    const divDate      = optMeta?.dividendDate;         // 배당 지급일
+
+    if (exDivTs) {
+      const exDate = new Date(exDivTs * 1000);
+      // 분기 배당금 = dividendRate (연간) / 4 — 단, 실제 선언 금액 우선
+      const perShare = fwdDivRate
+        ? (fwdDivRate / 4).toFixed(4)
+        : divAmt ? (divAmt / 4).toFixed(4) : '미정';
+      events.push({
+        date: exDate,
+        type: 'div',
+        label: '배당락일 (공시)',
+        detail: `이 날까지 보유 시 배당 수령 · 주당 $${perShare}`
+      });
+      if (divDate) {
+        events.push({
+          date: new Date(divDate * 1000),
+          type: 'div',
+          label: '배당 지급일',
+          detail: `주당 $${perShare} 지급`
+        });
+      }
+    } else if (divAmt && divAmt > 0) {
       events.push({
         date: new Date(),
         type: 'div',
-        label: '💰 배당 정보',
-        detail: `연간 배당금 $${divAmt.toFixed(3)} · 수익률 ${divYield?.toFixed(2)||'—'}%`
+        label: '배당 정보',
+        detail: `다음 배당락일 미확인 · 연간 주당 $${divAmt.toFixed(3)}`
       });
     }
 
