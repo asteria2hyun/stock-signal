@@ -1735,11 +1735,68 @@ function selectNewsTicker(ticker) {
   else loadCalendar(ticker);
 }
 
+let newsAllItems = [];
+let newsTranslatedUpto = 0;
+
+function makeNewsCard(n, i, translated=false) {
+  return `
+    <div class="news-item" onclick="window.open('${n.url}','_blank')" id="news-${i}">
+      <div class="news-title" id="title-${i}">${n.headline}</div>
+      <div class="news-summary" id="summary-${i}" style="color:var(--t4);font-style:italic;">${translated?'':''}</div>
+      <div class="news-meta">
+        <span class="news-src">${n.source||''}</span>
+        <span>${n.datetime?new Date(n.datetime*1000).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}):''}</span>
+      </div>
+    </div>`;
+}
+
+async function translateNewsRange(from, to) {
+  const batch = newsAllItems.slice(from, to);
+  if (!batch.length) return;
+  // 번역 중 표시
+  for (let i=from; i<to; i++) {
+    const s = document.getElementById(`summary-${i}`);
+    if (s) { s.textContent='번역 중...'; s.style.fontStyle='italic'; s.style.color='var(--t4)'; s.style.display=''; }
+  }
+  const batchResult = await geminiBatchNews(batch);
+  for (let i=from; i<to; i++) {
+    const r = batchResult?.[i-from];
+    const titleEl   = document.getElementById(`title-${i}`);
+    const summaryEl = document.getElementById(`summary-${i}`);
+    if (titleEl && r?.title) titleEl.textContent = r.title;
+    if (summaryEl) {
+      if (r?.summary) { summaryEl.textContent=r.summary; summaryEl.style.color='var(--t3)'; summaryEl.style.fontStyle='normal'; }
+      else summaryEl.style.display='none';
+    }
+  }
+  newsTranslatedUpto = to;
+  // 더보기 버튼 업데이트
+  const moreBtn = document.getElementById('newsMoreBtn');
+  if (moreBtn) {
+    if (newsTranslatedUpto >= newsAllItems.length) moreBtn.style.display='none';
+    else moreBtn.textContent = `🔄 다음 8개 번역 (${newsAllItems.length - newsTranslatedUpto}개 남음)`;
+  }
+}
+
+async function loadMoreNews() {
+  const next = Math.min(newsTranslatedUpto + 8, newsAllItems.length);
+  // 아직 카드가 없는 것들 추가
+  const el = document.getElementById('newsSection');
+  const moreBtn = document.getElementById('newsMoreBtn');
+  for (let i=newsTranslatedUpto; i<next; i++) {
+    const card = document.createElement('div');
+    card.innerHTML = makeNewsCard(newsAllItems[i], i);
+    el.insertBefore(card.firstElementChild, moreBtn);
+  }
+  await translateNewsRange(newsTranslatedUpto, next);
+}
+
 async function loadNews(ticker) {
   const el = document.getElementById('newsSection');
+  newsAllItems = [];
+  newsTranslatedUpto = 0;
   el.innerHTML = '<div class="news-loading">📰 뉴스 불러오는 중...</div>';
   try {
-    // Finnhub 뉴스 (CORS 없이 직접 호출)
     const today = new Date().toISOString().slice(0,10);
     const from  = new Date(Date.now() - 7*24*60*60*1000).toISOString().slice(0,10);
     const news  = await finnhub(`/company-news?symbol=${ticker}&from=${from}&to=${today}`);
@@ -1749,38 +1806,22 @@ async function loadNews(ticker) {
       return;
     }
 
-    // 최신순 8개
-    const items = news.sort((a,b)=>b.datetime-a.datetime).slice(0,8);
+    newsAllItems = news.sort((a,b)=>b.datetime-a.datetime);
+    const first8 = Math.min(8, newsAllItems.length);
 
-    // 카드 먼저 표시
-    el.innerHTML = items.map((n,i) => `
-      <div class="news-item" onclick="window.open('${n.url}','_blank')" id="news-${i}">
-        <div class="news-title" id="title-${i}">${n.headline}</div>
-        <div class="news-summary" id="summary-${i}" style="color:var(--t4);font-style:italic;">번역 중...</div>
-        <div class="news-meta">
-          <span class="news-src">${n.source||''}</span>
-          <span>${n.datetime ? new Date(n.datetime*1000).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}) : ''}</span>
-        </div>
-      </div>
-    `).join('');
+    // 첫 8개 카드 + 더보기 버튼
+    el.innerHTML =
+      newsAllItems.slice(0, first8).map((n,i) => makeNewsCard(n,i)).join('') +
+      (newsAllItems.length > first8 ? `
+        <button id="newsMoreBtn" onclick="loadMoreNews()"
+          style="width:100%;padding:13px;background:var(--card2);border:1px solid var(--border2);
+                 border-radius:10px;color:var(--blue);font-size:13px;font-weight:600;cursor:pointer;margin-top:4px;">
+          🔄 다음 8개 번역 (${newsAllItems.length - first8}개 남음)
+        </button>` : '');
 
-    // Gemini 배치 번역 (한번에 전체 처리)
-    const batchResult = await geminiBatchNews(items);
-    for (let i=0; i<items.length; i++) {
-      const r = batchResult?.[i];
-      const titleEl   = document.getElementById(`title-${i}`);
-      const summaryEl = document.getElementById(`summary-${i}`);
-      if (titleEl   && r?.title)   titleEl.textContent = r.title;
-      if (summaryEl) {
-        if (r?.summary) {
-          summaryEl.textContent = r.summary;
-          summaryEl.style.color = 'var(--t3)';
-          summaryEl.style.fontStyle = 'normal';
-        } else {
-          summaryEl.style.display = 'none';
-        }
-      }
-    }
+    // 첫 8개 번역
+    await translateNewsRange(0, first8);
+
   } catch(e) {
     el.innerHTML = `<div class="empty">뉴스 로드 실패<br><span style="font-size:12px">${e.message}</span></div>`;
   }
