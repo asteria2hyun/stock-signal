@@ -1065,13 +1065,16 @@ async function fetchAnalyst(ticker) {
     const recKey  = recMean<=1.5?'strongBuy':recMean<=2.5?'buy':recMean<=3.5?'hold':recMean<=4.5?'sell':'strongSell';
 
     let targetMean=null, targetHigh=null, targetLow=null, numAnalysts=total;
+    // Yahoo Finance에서 목표가 가져오기 (무료)
     try {
-      const target = await finnhub(`/stock/price-target?symbol=${ticker}`);
-      if (target?.targetMean) {
-        targetMean  = target.targetMean;
-        targetHigh  = target.targetHigh;
-        targetLow   = target.targetLow;
-        numAnalysts = target.numberOfAnalysts || total;
+      const yUrl = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${ticker}?modules=financialData`;
+      const yData = await fetchJSON(yUrl);
+      const fin = yData?.quoteSummary?.result?.[0]?.financialData;
+      if (fin?.targetMeanPrice?.raw) {
+        targetMean  = fin.targetMeanPrice.raw;
+        targetHigh  = fin.targetHighPrice?.raw || null;
+        targetLow   = fin.targetLowPrice?.raw  || null;
+        numAnalysts = fin.numberOfAnalystOpinions?.raw || total;
       }
     } catch(e) {}
 
@@ -1737,6 +1740,12 @@ function selectNewsTicker(ticker) {
 
 let newsAllItems = [];
 let newsTranslatedUpto = 0;
+const newsTransCache = {}; // ticker → { items, translated }
+
+function getNewsCache(ticker) { return newsTransCache[ticker] || null; }
+function setNewsCache(ticker, items, translated) {
+  newsTransCache[ticker] = { items, translated, ts: Date.now() };
+}
 
 function makeNewsCard(n, i, translated=false) {
   return `
@@ -1770,6 +1779,19 @@ async function translateNewsRange(from, to) {
     }
   }
   newsTranslatedUpto = to;
+  // 캐시 업데이트
+  if (activeNewsTicker) {
+    const cached = getNewsCache(activeNewsTicker) || { items: newsAllItems, translated: {} };
+    for (let i=from; i<to; i++) {
+      const titleEl   = document.getElementById(`title-${i}`);
+      const summaryEl = document.getElementById(`summary-${i}`);
+      cached.translated[i] = {
+        title:   titleEl?.textContent || null,
+        summary: summaryEl?.style.display==='none' ? null : summaryEl?.textContent || null
+      };
+    }
+    setNewsCache(activeNewsTicker, newsAllItems, cached.translated);
+  }
   // 더보기 버튼 업데이트
   const moreBtn = document.getElementById('newsMoreBtn');
   if (moreBtn) {
@@ -1793,8 +1815,36 @@ async function loadMoreNews() {
 
 async function loadNews(ticker) {
   const el = document.getElementById('newsSection');
-  newsAllItems = [];
   newsTranslatedUpto = 0;
+
+  // 캐시 확인 (30분 이내)
+  const cached = getNewsCache(ticker);
+  if (cached && (Date.now() - cached.ts < 30*60*1000)) {
+    newsAllItems = cached.items;
+    const first = Math.min(Object.keys(cached.translated).length || 8, newsAllItems.length);
+    newsTranslatedUpto = first;
+    el.innerHTML =
+      newsAllItems.slice(0, first).map((n,i) => makeNewsCard(n,i,true)).join('') +
+      (newsAllItems.length > first ? `
+        <button id="newsMoreBtn" onclick="loadMoreNews()"
+          style="width:100%;padding:13px;background:var(--card2);border:1px solid var(--border2);
+                 border-radius:10px;color:var(--blue);font-size:13px;font-weight:600;cursor:pointer;margin-top:4px;">
+          🔄 다음 8개 번역 (${newsAllItems.length - first}개 남음)
+        </button>` : '');
+    // 캐시된 번역 적용
+    for (const [i, r] of Object.entries(cached.translated)) {
+      const titleEl   = document.getElementById(`title-${i}`);
+      const summaryEl = document.getElementById(`summary-${i}`);
+      if (titleEl && r?.title) titleEl.textContent = r.title;
+      if (summaryEl) {
+        if (r?.summary) { summaryEl.textContent=r.summary; summaryEl.style.color='var(--t3)'; summaryEl.style.fontStyle='normal'; }
+        else summaryEl.style.display='none';
+      }
+    }
+    return;
+  }
+
+  newsAllItems = [];
   el.innerHTML = '<div class="news-loading">📰 뉴스 불러오는 중...</div>';
   try {
     const today = new Date().toISOString().slice(0,10);
