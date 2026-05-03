@@ -190,7 +190,7 @@ body{
 }
 .hi.BUY {border-left-color:var(--green);}
 .hi.SELL{border-left-color:var(--red);}
-.hi.WAIT{border-left-color:var(--yellow);}
+.hi.WAIT{border-left-color:var(--orange);}
 .hi:active{opacity:.8;}
 .hi-l{flex:1;min-width:0;}
 .hi-tk{font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:700;color:var(--t1);letter-spacing:1px;}
@@ -204,7 +204,7 @@ body{
 .badge{font-size:11px;font-weight:700;padding:3px 10px;border-radius:20px;letter-spacing:.5px;}
 .badge.BUY {background:rgba(0,209,122,.15);color:var(--green2);}
 .badge.SELL{background:rgba(255,61,90,.15);color:var(--red2);}
-.badge.WAIT{background:rgba(255,214,0,.15);color:var(--yellow);}
+.badge.WAIT{background:rgba(255,140,66,.15);color:var(--orange);}
 .badge.HOLD{background:rgba(77,168,255,.15);color:var(--blue);}
 .badge.LOAD{background:var(--border);color:var(--t4);}
 .del-btn{background:none;border:none;color:var(--t5);font-size:18px;padding:4px 2px;cursor:pointer;flex-shrink:0;}
@@ -248,12 +248,12 @@ body{
 }
 .hero.BUY {border:1.5px solid var(--green); background:rgba(0,209,122,.06);}
 .hero.SELL{border:1.5px solid var(--red);   background:rgba(255,61,90,.06);}
-.hero.WAIT{border:1.5px solid var(--yellow);background:rgba(255,214,0,.06);}
+.hero.WAIT{border:1.5px solid var(--orange);background:rgba(255,140,66,.06);}
 .hero.HOLD{border:1.5px solid var(--blue);  background:rgba(77,168,255,.06);}
 .hero-act{font-family:'JetBrains Mono',monospace;font-size:26px;font-weight:700;letter-spacing:2px;line-height:1;}
 .hero.BUY  .hero-act{color:var(--green2);}
 .hero.SELL .hero-act{color:var(--red2);}
-.hero.WAIT .hero-act{color:var(--yellow);}
+.hero.WAIT .hero-act{color:var(--orange);}
 .hero.HOLD .hero-act{color:var(--blue);}
 .hero-sub{font-size:12px;color:var(--t3);margin-top:6px;}
 .str-bar{height:5px;background:var(--border);border-radius:3px;margin-top:12px;overflow:hidden;}
@@ -797,7 +797,7 @@ function renderList(type, list, elId) {
           <div class="hi-ch ${q?(q.chg>=0?'up':'dn'):''}">${chgStr}</div>
         </div>
         <div class="hi-r">
-          <span class="badge ${sig}">${sig==='LOAD'?'—':sig}</span>
+          <span class="badge ${sig}">${sig==='LOAD'?'—':sig==='HOLD'?'홀드':sig==='WAIT'?'대기':sig==='SELL'?'매도':sig==='BUY'?'매수':sig}</span>
         </div>
         <button class="del-btn" onclick="event.stopPropagation();removeItem('${type}',${i})">✕</button>
       </div>
@@ -1388,13 +1388,13 @@ function renderAnalysis(ticker) {
   const barColor = r.pctBull>60?'var(--green)':r.pctBull<40?'var(--red)':'var(--yellow)';
 
   // 추천 방향 라벨
-  const recLabel = r.recommend==='sell'?'🔴 매도 추천'
-    : r.recommend==='buy' ?'🟢 매수 추천'
-    : r.recommend==='hold'?'🔵 홀드 추천'
-    : '🟡 관망';
+  const recLabel = r.recommend==='sell'?'🔴 매도'
+    : r.recommend==='buy' ?'🟢 매수'
+    : r.action==='HOLD'   ?'🔵 홀드 (추세 강세)'
+    : '🟠 대기 (신호 불분명)';
   const heroClass = r.recommend==='sell'?'SELL'
     : r.recommend==='buy'?'BUY'
-    : r.recommend==='hold'?'HOLD':'WAIT';
+    : r.action==='HOLD'?'HOLD':'WAIT';
 
   // 매도 타점 섹션
   const pct = h?.qty ? Math.round(r.sellQty/h.qty*100) : 0;
@@ -1696,10 +1696,10 @@ function renderSummary() {
   };
 
   el.innerHTML=
-    grp(sells,'🔴 매도 타점 (보유 → 익절/손절)')+
-    grp(holds,'🔵 홀드 유지 (보유 → 추세 강세)')+
-    grp(buys, '🟢 매수 타점 (관심 → 진입)')+
-    grp(waits,'🟡 관망 (신호 대기)')+
+    grp(sells,'🔴 매도')+
+    grp(holds,'🔵 홀드 · 추세 강세 (계속 보유)')+
+    grp(buys,'🟢 매수')+
+    grp(waits,'🟠 대기 · 신호 불분명')+
     '<div class="disc">⚠️ 순수 기술적 분석 기반 참고용입니다.</div>';
 }
 
