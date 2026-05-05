@@ -471,9 +471,23 @@ body{
       <input class="inp qt" id="inQty" type="number" placeholder="수량" min="1">
       <button class="btn-add" onclick="searchAdd()">+</button>
     </div>
-    <div id="qtyHint" style="font-size:11px;color:var(--t4);margin-bottom:12px;padding-left:2px;">
+    <div id="qtyHint" style="font-size:11px;color:var(--t4);margin-bottom:8px;padding-left:2px;">
       보유 수량 입력 (선택) · 나중에 수정 가능
     </div>
+    <!-- 스크린샷 업로드 -->
+    <div id="screenshotZone" onclick="document.getElementById('ssInput').click()"
+      style="border:1.5px dashed var(--border2);border-radius:10px;padding:12px 14px;
+             display:flex;align-items:center;gap:10px;cursor:pointer;margin-bottom:12px;
+             background:var(--bg2);transition:border-color .2s;"
+      onmouseover="this.style.borderColor='var(--green)'"
+      onmouseout="this.style.borderColor='var(--border2)'">
+      <span style="font-size:22px;">📷</span>
+      <div>
+        <div style="font-size:13px;font-weight:700;color:var(--t2);">보유 종목 스크린샷 자동 인식</div>
+        <div style="font-size:11px;color:var(--t4);">이미지 탭 → Gemini AI가 종목·수량 자동 파싱</div>
+      </div>
+    </div>
+    <input type="file" id="ssInput" accept="image/*" style="display:none" onchange="parseScreenshot(event)">
   </div>
 
   <!-- 종목 리스트 -->
@@ -515,6 +529,7 @@ body{
     <div class="seg" style="margin-bottom:14px;">
       <button class="seg-btn on" id="news-seg-news" onclick="switchNewsSeg('news')">📰 뉴스</button>
       <button class="seg-btn"    id="news-seg-cal"  onclick="switchNewsSeg('cal')">📅 일정</button>
+      <button class="seg-btn"    id="news-seg-market" onclick="switchNewsSeg('market')">🌐 시장</button>
     </div>
 
     <!-- 종목 선택 칩 -->
@@ -528,6 +543,11 @@ body{
     <!-- 일정 섹션 -->
     <div id="calSection" style="display:none;">
       <div class="empty">종목을 선택하거나 분석을 먼저 실행해주세요</div>
+    </div>
+
+    <!-- 시장 현황 섹션 -->
+    <div id="marketSection" style="display:none;">
+      <div class="empty">시장 현황을 불러오는 중...</div>
     </div>
 
   </div>
@@ -579,6 +599,19 @@ body{
 </div>
 
 <div class="toast" id="toast"></div>
+
+<!-- 스크린샷 파싱 모달 -->
+<div class="overlay" id="parseOverlay">
+  <div class="modal">
+    <div class="modal-title">📷 종목 인식 결과</div>
+    <div class="modal-sub" id="parseSub">아래 종목을 확인하고 추가할 항목을 선택하세요</div>
+    <div id="parseList"></div>
+    <div class="modal-footer">
+      <button class="btn-cancel" onclick="document.getElementById('parseOverlay').classList.remove('on')">취소</button>
+      <button class="btn-confirm" onclick="confirmParse()">선택 항목 추가</button>
+    </div>
+  </div>
+</div>
 
 <script>
 // ═══════════════════════════════════════════════
@@ -797,7 +830,7 @@ function renderList(type, list, elId) {
           <div class="hi-ch ${q?(q.chg>=0?'up':'dn'):''}">${chgStr}</div>
         </div>
         <div class="hi-r">
-          <span class="badge ${sig}">${sig==='LOAD'?'—':sig==='HOLD'?'홀드':sig==='WAIT'?'대기':sig==='SELL'?'매도':sig==='BUY'?'매수':sig}</span>
+          <span class="badge ${sig}">${sig==='LOAD'?'—':sig==='HOLD'?'홀드':sig==='WAIT'?'유보':sig==='SELL'?'매도':sig==='BUY'?'매수':sig}</span>
         </div>
         <button class="del-btn" onclick="event.stopPropagation();removeItem('${type}',${i})">✕</button>
       </div>
@@ -1086,7 +1119,138 @@ async function fetchAnalyst(ticker) {
 }
 
 // ═══════════════════════════════════════════════
-// 지표 함수
+// 스크린샷 자동 파싱 (Gemini Vision)
+// ═══════════════════════════════════════════════
+let parsedItems = [];
+
+async function parseScreenshot(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  event.target.value = ''; // 같은 파일 재선택 허용
+
+  // 로딩 표시
+  const zone = document.getElementById('screenshotZone');
+  zone.innerHTML = `<span style="font-size:22px;">⏳</span><div style="font-size:13px;color:var(--t4);">Gemini AI 분석 중...</div>`;
+
+  try {
+    // 이미지 → base64
+    const base64 = await new Promise((res, rej) => {
+      const reader = new FileReader();
+      reader.onload = () => res(reader.result.split(',')[1]);
+      reader.onerror = rej;
+      reader.readAsDataURL(file);
+    });
+
+    // Gemini Vision API 호출
+    const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_KEY}`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        contents: [{
+          parts: [
+            { text: `이 이미지는 주식 앱의 보유종목 화면이야.
+이미지에서 종목 티커(ticker)와 보유 수량을 모두 추출해줘.
+반드시 아래 JSON 형식으로만 답해. 다른 말 없이:
+[{"ticker":"AAPL","qty":10},{"ticker":"TSLA","qty":5}]
+수량이 보이지 않으면 qty를 0으로. 티커가 한글 종목명이면 영문 티커로 변환해줘.` },
+            { inline_data: { mime_type: file.type, data: base64 } }
+          ]
+        }],
+        generationConfig: { temperature: 0.1, maxOutputTokens: 500 }
+      })
+    });
+
+    const d = await resp.json();
+    const text = d.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '[]';
+
+    // JSON 파싱
+    const clean = text.replace(/```json|```/g, '').trim();
+    parsedItems = JSON.parse(clean);
+
+    if (!parsedItems.length) {
+      toast('종목을 인식하지 못했습니다. 다시 시도해주세요');
+      resetScreenshotZone();
+      return;
+    }
+
+    // 기존 종목과 비교해서 신규/수정 구분
+    showParseModal(parsedItems);
+
+  } catch(e) {
+    toast('인식 실패: ' + e.message);
+  }
+  resetScreenshotZone();
+}
+
+function resetScreenshotZone() {
+  document.getElementById('screenshotZone').innerHTML = `
+    <span style="font-size:22px;">📷</span>
+    <div>
+      <div style="font-size:13px;font-weight:700;color:var(--t2);">보유 종목 스크린샷 자동 인식</div>
+      <div style="font-size:11px;color:var(--t4);">이미지 탭 → Gemini AI가 종목·수량 자동 파싱</div>
+    </div>`;
+}
+
+function showParseModal(items) {
+  const listEl = document.getElementById('parseList');
+  const subEl  = document.getElementById('parseSub');
+
+  const existing = holdings.map(h=>h.ticker);
+  const newItems = items.filter(i=>!existing.includes(i.ticker));
+  const updItems = items.filter(i=> existing.includes(i.ticker));
+
+  subEl.textContent = `${items.length}개 인식됨 · 신규 ${newItems.length}개 · 수량 업데이트 ${updItems.length}개`;
+
+  listEl.innerHTML = items.map((item, idx) => {
+    const isExisting = existing.includes(item.ticker);
+    const curQty = isExisting ? holdings.find(h=>h.ticker===item.ticker)?.qty || 0 : null;
+    return `
+      <div class="parse-item">
+        <div class="parse-check on" id="pcheck-${idx}" onclick="toggleParseCheck(${idx})">✓</div>
+        <div class="parse-tk">${item.ticker}</div>
+        <div class="parse-qty">
+          ${item.qty ? `${item.qty}주` : '수량 미확인'}
+          ${isExisting ? `<span style="font-size:10px;color:var(--blue);margin-left:4px;">(현재 ${curQty}주 → ${item.qty||curQty}주)</span>` : ''}
+        </div>
+        <span class="parse-type ${isExisting?'h':'h'}">${isExisting?'수정':'신규'}</span>
+      </div>`;
+  }).join('');
+
+  document.getElementById('parseOverlay').classList.add('on');
+}
+
+function toggleParseCheck(idx) {
+  const el = document.getElementById(`pcheck-${idx}`);
+  el.classList.toggle('on');
+  el.textContent = el.classList.contains('on') ? '✓' : '';
+}
+
+function confirmParse() {
+  let added=0, updated=0;
+  parsedItems.forEach((item, idx) => {
+    const checked = document.getElementById(`pcheck-${idx}`)?.classList.contains('on');
+    if (!checked) return;
+
+    const ticker = item.ticker.toUpperCase();
+    const qty    = item.qty || 0;
+    const existIdx = holdings.findIndex(h=>h.ticker===ticker);
+
+    if (existIdx >= 0) {
+      // 수량 업데이트
+      if (qty) { holdings[existIdx].qty = qty; updated++; }
+    } else {
+      // 신규 추가
+      holdings.push({ ticker, qty });
+      added++;
+    }
+  });
+
+  save();
+  renderLists();
+  document.getElementById('parseOverlay').classList.remove('on');
+  toast(`✅ 신규 ${added}개 추가 · ${updated}개 수량 업데이트`);
+}
+
 // ═══════════════════════════════════════════════
 const sma=(a,n)=>a.map((_,i)=>i<n-1?null:a.slice(i-n+1,i+1).reduce((s,v)=>s+v,0)/n);
 const ema=(a,n)=>{const k=2/(n+1);let e=a[0];const r=[e];for(let i=1;i<a.length;i++){e=a[i]*k+e*(1-k);r.push(e);}return r;};
@@ -1137,7 +1301,7 @@ function williamsR(data,p=14){if(data.length<p)return -50;const sl=data.slice(-p
 // ═══════════════════════════════════════════════
 // 조건 필터 기반 분석 엔진 v2
 // ═══════════════════════════════════════════════
-function analyze(data, qty, quote, mode, analyst=null) {
+function analyze(data, qty, quote, mode, analyst=null, portfolioWeight=0) {
   const closes=data.map(d=>d.close);
   const price=(quote?.price)||closes[closes.length-1];
   const n=data.length;
@@ -1231,16 +1395,40 @@ function analyze(data, qty, quote, mode, analyst=null) {
 
   const rawScore=f1+f2+f3+f4+f5+f6;
 
-  // [7] Risk Management
-  const buyTgt=Math.max(price*(1-atrV*1.5/price),srV.sup);
-  const buyGoal=buyTgt*(1+atrV*3/buyTgt);
-  const buyStop=buyTgt-atrV*2;
+  // [7] Risk Management + 추세 추종 매수 로직
+  // 추세 추종 조건: ADX>25 추세장 + 상승추세 + OBV 상승 + VWAP 위
+  const isTrendFollow = isTrend && trendUp && obvUp && aboveVwap;
+
+  let buyTgt, buyGoal, buyStop;
+  if (isTrendFollow && mode === 'buy') {
+    // 추세 추종: 현재가 기준 진입 (눌림목 대기 없이 지금 진입 가능)
+    // 진입가 = 현재가 or 직전 지지 (ATR 0.5배 아래) 중 높은 값
+    buyTgt  = Math.max(price * (1 - atrV * 0.5 / price), srV.sup);
+    buyGoal = price * (1 + atrV * 4 / price);   // 추세장이므로 목표 더 높게
+    buyStop = buyTgt - atrV * 1.5;               // 손절 타이트하게
+  } else {
+    // 기존 반등 매수: 조정 대기 후 진입
+    buyTgt  = Math.max(price * (1 - atrV * 1.5 / price), srV.sup);
+    buyGoal = buyTgt * (1 + atrV * 3 / buyTgt);
+    buyStop = buyTgt - atrV * 2;
+  }
   const rrBuy=buyGoal>buyTgt?(buyGoal-buyTgt)/(buyTgt-buyStop||1):0;
   const sellTgt=mode==='sell'?Math.min(price*(1+atrV*0.5/price),srV.res):price*(1+atrV/price);
   const sellStop=price-atrV*2;
   const rrSell=sellTgt>price?(sellTgt-price)/(price-sellStop||1):0;
   const rrPenalty=(mode==='buy'&&rrBuy<1.5)?-8:(mode==='sell'&&rrSell<1.5)?-5:0;
-  const adjustedScore=rawScore+rrPenalty;
+
+  // ── [8] 포트폴리오 비중 반영 ─────────────
+  let weightAdj = 0;
+  if (mode === 'sell' && portfolioWeight > 0) {
+    if      (portfolioWeight >= 0.40) weightAdj = -15; // 40%↑ 과도집중 → 강한 매도 압력
+    else if (portfolioWeight >= 0.30) weightAdj = -10; // 30%↑ 집중 → 분산 필요
+    else if (portfolioWeight >= 0.20) weightAdj = -6;  // 20%↑ 높은 비중
+    else if (portfolioWeight >= 0.10) weightAdj = -3;  // 10%↑ 약간 높음
+    else if (portfolioWeight <= 0.03) weightAdj = +5;  // 3%↓ 소규모 → 매도 완화
+  }
+
+  const adjustedScore = rawScore + rrPenalty + weightAdj;
   const confidence=Math.round(Math.min(100,Math.max(0,50+adjustedScore*0.5)));
 
   // 매도 수량
@@ -1258,8 +1446,11 @@ function analyze(data, qty, quote, mode, analyst=null) {
     else if(S>=20){action='HOLD';recommend='hold';note=`추세 강세 · 홀드 유지 · 신뢰도 ${confidence}`;}
     else{action='WAIT';recommend='hold';note=`신호 불분명 · ${marketState} 관망 · 신뢰도 ${confidence}`;}
   }else{
-    if(S>=35){action='BUY';recommend='buy';note=`강한 매수 · ${isTrend&&trendUp?'추세 추종':isSqueeze?'Squeeze 돌파':'반등'} · 신뢰도 ${confidence}`;}
-    else if(S>=18){action='BUY';recommend='buy';note=`매수 가능 · ${obvBullDiv?'OBV 강세 다이버전스':'모멘텀 상승'} · 신뢰도 ${confidence}`;}
+    // 추세 추종 모드: 임계값 낮춤 (35→25)
+    const buyThreshold = isTrendFollow ? 25 : 35;
+    const buyWeakThreshold = isTrendFollow ? 15 : 18;
+    if(S>=buyThreshold){action='BUY';recommend='buy';note=`${isTrendFollow?'추세 추종 매수':'강한 매수'} · ${isTrend&&trendUp?'추세장 상승':isSqueeze?'Squeeze 돌파':'반등'} · 신뢰도 ${confidence}`;}
+    else if(S>=buyWeakThreshold){action='BUY';recommend='buy';note=`매수 가능 · ${obvBullDiv?'OBV 강세 다이버전스':isTrendFollow?'추세 추종':'모멘텀 상승'} · 신뢰도 ${confidence}`;}
     else if(S<=-20){action='WAIT';recommend='wait';note=`하락중 · 지지선 대기 · 신뢰도 ${confidence}`;}
     else{action='WAIT';recommend='wait';note=`${marketState} · 조건 미충족 · 신뢰도 ${confidence}`;}
   }
@@ -1280,9 +1471,15 @@ function analyze(data, qty, quote, mode, analyst=null) {
     {n:'감성지수',v:fearGreed.toString(),note:isGreedy?'탐욕':isFearful?'공포':'중립',d:isFearful?1:isGreedy?-1:0},
   ];
   if(analyst?.targetMean)sigs.push({n:'애널리스트',v:`목표 $${analyst.targetMean.toFixed(0)}`,note:`${((analyst.targetMean-price)/price*100).toFixed(1)}% · ${analyst.numAnalysts}명`,d:f6>0?1:f6<0?-1:0});
+  if(mode==='sell' && portfolioWeight>0)sigs.push({
+    n:'포트폴리오 비중',
+    v:`${(portfolioWeight*100).toFixed(1)}%`,
+    note: portfolioWeight>=0.30?'과도 집중 · 분산 필요':portfolioWeight>=0.20?'높은 비중':portfolioWeight>=0.10?'적정 수준':'소규모 포지션',
+    d: portfolioWeight>=0.20?-1:portfolioWeight<=0.03?1:0
+  });
 
   const filters={
-    trend:{score:f1,label:`ADX ${adxV.adx.toFixed(1)} · ${marketState}`,dir:f1>0?1:f1<0?-1:0},
+    trend:{score:f1,label:`ADX ${adxV.adx.toFixed(1)} · ${marketState}${isTrendFollow?' · 🚀 추세 추종':''}`,dir:f1>0?1:f1<0?-1:0},
     smartMoney:{score:f2,label:`${obvDivLabel} · VWAP ${aboveVwap?'위':'아래'}`,dir:f2>0?1:f2<0?-1:0},
     volatility:{score:f3,label:isSqueeze?`Squeeze (BBW ${(bbW*100).toFixed(1)}%)`:isExpand?`변동성 확장`:`중립 (ATR ${atrPct.toFixed(1)}%)`,dir:f3>0?1:f3<0?-1:0},
     timing:{score:f4,label:`RSI ${rsiV.toFixed(0)} · MACD ${macdCrossUp?'골든X':macdCrossDown?'데드X':macdBull?'강세':'약세'}`,dir:f4>0?1:f4<0?-1:0},
@@ -1300,7 +1497,7 @@ function analyze(data, qty, quote, mode, analyst=null) {
     rsiV,bbL,bbA,srV,fibV,atrV,vwapV,
     lma20,lma50,lma200,ma20,ma50,e9,
     ml,ms,stK,stD,volR,price,
-    adxV,obvBullDiv,obvBearDiv,fearGreed,
+    adxV,obvBullDiv,obvBearDiv,fearGreed,isTrendFollow,
     latest:data[data.length-1]
   };
 }
@@ -1324,17 +1521,34 @@ async function runAll() {
   document.getElementById('prog').classList.add('on');
 
   // 모든 종목 동시 병렬 분석
+  // 1단계: 시세 먼저 가져오기 (비중 계산용)
+  const quoteMap = {};
+  await Promise.all(allItems.map(async h => {
+    try { quoteMap[h.ticker] = await fetchQuote(h.ticker); } catch(e) {}
+  }));
+
+  // 포트폴리오 총 평가금액 계산 (보유 종목만)
+  const totalValue = holdings.reduce((sum, h) => {
+    const q = quoteMap[h.ticker];
+    return sum + (q?.price||0) * (h.qty||0);
+  }, 0);
+
+  // 2단계: 전체 분석
   await Promise.all(allItems.map(async h => {
     try {
-      const [quote, hist, analyst] = await Promise.all([
-        fetchQuote(h.ticker),
+      const [hist, analyst] = await Promise.all([
         fetchHistory(h.ticker, currentTF),
         fetchAnalyst(h.ticker)
       ]);
+      const quote = quoteMap[h.ticker];
       if (!hist||hist.length<10) { cache[h.ticker]={error:true}; return; }
       const mode = h.type==='holding' ? 'sell' : 'buy';
-      const result = analyze(hist, h.qty||0, quote, mode, analyst);
-      cache[h.ticker] = { quote, hist, result, analyst, type:h.type };
+      // 포트폴리오 비중 계산
+      const weight = (mode==='sell' && totalValue>0 && quote?.price && h.qty)
+        ? (quote.price * h.qty) / totalValue
+        : 0;
+      const result = analyze(hist, h.qty||0, quote, mode, analyst, weight);
+      cache[h.ticker] = { quote, hist, result, analyst, type:h.type, weight };
     } catch(e) {
       cache[h.ticker]={error:true};
     }
@@ -1391,19 +1605,21 @@ function renderAnalysis(ticker) {
   const recLabel = r.recommend==='sell'?'🔴 매도'
     : r.recommend==='buy' ?'🟢 매수'
     : r.action==='HOLD'   ?'🔵 홀드 (추세 강세)'
-    : '🟠 대기 (신호 불분명)';
+    : '🟠 유보 (판단 유보)';
   const heroClass = r.recommend==='sell'?'SELL'
     : r.recommend==='buy'?'BUY'
     : r.action==='HOLD'?'HOLD':'WAIT';
 
   // 매도 타점 섹션
   const pct = h?.qty ? Math.round(r.sellQty/h.qty*100) : 0;
+  const sellTgtDisplay = r.sellTgt && r.sellTgt <= r.price
+    ? `<span style="color:var(--t4);font-size:12px;">현재가 이상 도달 대기 중</span>`
+    : `<span class="iv o">$${r.sellTgt?.toFixed(2)||'—'}${r.recommend==='sell'?'<span style="font-size:10px;background:rgba(255,61,90,.2);color:var(--red2);padding:1px 6px;border-radius:4px;margin-left:4px;">추천</span>':''}</span>`;
+
   const sellRows = `
     <div class="irow">
       <span class="il">매도 타점</span>
-      <span class="iv o">$${r.sellTgt?.toFixed(2)||'—'}
-        ${r.recommend==='sell'?'<span style="font-size:10px;background:rgba(255,61,90,.2);color:var(--red2);padding:1px 6px;border-radius:4px;margin-left:4px;">추천</span>':''}
-      </span>
+      ${sellTgtDisplay}
     </div>
     ${type==='holding' && r.sellQty ? `
     <div class="irow"><span class="il">권장 매도 수량</span><span class="iv r">${r.sellQty}주 (${pct}%)</span></div>
@@ -1457,7 +1673,8 @@ function renderAnalysis(ticker) {
       <span class="type-tag ${type==='holding'?'holding':'watch'}">${modeLabel}</span>
       ${q?`<span style="font-family:'JetBrains Mono';font-size:18px;font-weight:700;color:var(--t1);margin-left:auto;">$${q.price.toFixed(2)}</span>`:''}
     </div>
-    ${q?`<div style="font-size:13px;color:${q.chg>=0?'var(--green)':'var(--red)'};margin-bottom:14px;">${q.chg>=0?'+':''}${q.chg.toFixed(2)} (${q.chgPct.toFixed(1)}%) 전일대비</div>`:'<div style="margin-bottom:14px;"></div>'}
+    ${q?`<div style="font-size:13px;color:${q.chg>=0?'var(--green)':'var(--red)'};margin-bottom:6px;">${q.chg>=0?'+':''}${q.chg.toFixed(2)} (${q.chgPct.toFixed(1)}%) 전일대비</div>`:'<div style="margin-bottom:6px;"></div>'}
+    ${c.weight>0?`<div style="font-size:11px;color:var(--t4);margin-bottom:10px;">포트폴리오 비중 <span style="color:${c.weight>=0.30?'var(--red2)':c.weight>=0.20?'var(--orange)':'var(--t2)'}; font-weight:700;">${(c.weight*100).toFixed(1)}%</span>${c.weight>=0.30?' · 과도 집중':c.weight>=0.20?' · 높은 비중':''}</div>`:'<div style="margin-bottom:10px;"></div>'}
 
     <div class="hero ${heroClass}">
       <div class="hero-act">${recLabel}</div>
@@ -1470,6 +1687,7 @@ function renderAnalysis(ticker) {
           신뢰도 ${r.confidence??Math.round(Math.min(100,Math.max(0,50+r.score*0.5)))}/100
         </span>
         ${r.isSqueeze?'<span style="font-size:11px;background:rgba(255,214,0,.2);color:var(--yellow);padding:3px 8px;border-radius:6px;">⚡ BB Squeeze</span>':''}
+        ${r.isTrendFollow&&r.mode==='buy'?'<span style="font-size:11px;background:rgba(0,209,122,.2);color:var(--green2);padding:3px 8px;border-radius:6px;">🚀 추세 추종</span>':''}
       </div>
       <div class="str-bar" style="margin-top:10px;"><div class="str-fill" style="width:${r.pctBull}%;background:${barColor};"></div></div>
     </div>
@@ -1650,7 +1868,7 @@ async function changeTF(tf, btn) {
   if (hist&&hist.length>=5) {
     const c=cache[activeAnalysis];
     const mode=h.type==='holding'?'sell':'buy';
-    c.hist=hist; c.result=analyze(hist,h.qty||0,c.quote,mode,c.analyst||null);
+    c.hist=hist; c.result=analyze(hist,h.qty||0,c.quote,mode,c.analyst||null,c.weight||0);
     renderAnalysis(activeAnalysis);
   } else toast('데이터 로드 실패');
 }
@@ -1699,7 +1917,7 @@ function renderSummary() {
     grp(sells,'🔴 매도')+
     grp(holds,'🔵 홀드 · 추세 강세 (계속 보유)')+
     grp(buys,'🟢 매수')+
-    grp(waits,'🟠 대기 · 신호 불분명')+
+    grp(waits,'🟠 유보 · 판단 유보')+
     '<div class="disc">⚠️ 순수 기술적 분석 기반 참고용입니다.</div>';
 }
 
@@ -1771,12 +1989,13 @@ function switchNewsSeg(seg) {
   activeNewsSeg = seg;
   document.getElementById('news-seg-news').classList.toggle('on', seg==='news');
   document.getElementById('news-seg-cal').classList.toggle('on',  seg==='cal');
-  document.getElementById('newsSection').style.display = seg==='news'?'block':'none';
-  document.getElementById('calSection').style.display  = seg==='cal' ?'block':'none';
-  if (activeNewsTicker) {
-    if (seg==='news') loadNews(activeNewsTicker);
-    else loadCalendar(activeNewsTicker);
-  }
+  document.getElementById('news-seg-market').classList.toggle('on', seg==='market');
+  document.getElementById('newsSection').style.display   = seg==='news'?'block':'none';
+  document.getElementById('calSection').style.display    = seg==='cal'?'block':'none';
+  document.getElementById('marketSection').style.display = seg==='market'?'block':'none';
+  if (seg==='news' && activeNewsTicker) loadNews(activeNewsTicker);
+  else if (seg==='cal' && activeNewsTicker) loadCalendar(activeNewsTicker);
+  else if (seg==='market') loadMarketOverview();
 }
 
 async function switchTab(name) {
@@ -1943,6 +2162,129 @@ async function loadNews(ticker) {
 
   } catch(e) {
     el.innerHTML = `<div class="empty">뉴스 로드 실패<br><span style="font-size:12px">${e.message}</span></div>`;
+  }
+}
+
+// ═══════════════════════════════════════════════
+// 시장 현황
+// ═══════════════════════════════════════════════
+let marketCacheTs = 0;
+
+async function loadMarketOverview() {
+  const el = document.getElementById('marketSection');
+  // 15분 캐시
+  if (Date.now() - marketCacheTs < 15*60*1000 && el.dataset.loaded) return;
+
+  el.innerHTML = '<div class="news-loading">🌐 시장 현황 불러오는 중...</div>';
+
+  try {
+    const today = new Date().toISOString().slice(0,10);
+    const from  = new Date(Date.now() - 24*60*60*1000).toISOString().slice(0,10);
+
+    // 병렬: 시장 뉴스 + VIX + 주요 지수
+    const [marketNews, vixData, spData, nasdaqData] = await Promise.all([
+      finnhub(`/news?category=general&minId=0`).catch(()=>[]),
+      fetchJSON(`https://query1.finance.yahoo.com/v8/finance/chart/%5EVIX?interval=1d&range=5d`).catch(()=>null),
+      fetchJSON(`https://query1.finance.yahoo.com/v8/finance/chart/%5EGSPC?interval=1d&range=5d`).catch(()=>null),
+      fetchJSON(`https://query1.finance.yahoo.com/v8/finance/chart/%5EIXIC?interval=1d&range=5d`).catch(()=>null),
+    ]);
+
+    // VIX 파싱
+    const vixMeta = vixData?.chart?.result?.[0]?.meta;
+    const vixVal  = vixMeta?.regularMarketPrice;
+    const vixPrev = vixMeta?.previousClose;
+    const vixChg  = vixVal && vixPrev ? vixVal - vixPrev : null;
+
+    // S&P500 파싱
+    const spMeta  = spData?.chart?.result?.[0]?.meta;
+    const spVal   = spMeta?.regularMarketPrice;
+    const spPrev  = spMeta?.previousClose;
+    const spChgPct= spVal && spPrev ? (spVal-spPrev)/spPrev*100 : null;
+
+    // 나스닥 파싱
+    const nqMeta  = nasdaqData?.chart?.result?.[0]?.meta;
+    const nqVal   = nqMeta?.regularMarketPrice;
+    const nqPrev  = nqMeta?.previousClose;
+    const nqChgPct= nqVal && nqPrev ? (nqVal-nqPrev)/nqPrev*100 : null;
+
+    // VIX 상태
+    const vixStatus = !vixVal ? '—'
+      : vixVal >= 30 ? '😱 극도 공포'
+      : vixVal >= 20 ? '😰 불안'
+      : vixVal >= 15 ? '😐 중립'
+      : '😊 안정';
+    const vixColor = !vixVal ? 'var(--t4)'
+      : vixVal >= 30 ? 'var(--red)' : vixVal >= 20 ? 'var(--orange)' : vixVal >= 15 ? 'var(--yellow)' : 'var(--green)';
+
+    // 지수 HTML
+    const indexHtml = `
+      <div class="card" style="margin-bottom:14px;">
+        <div style="font-size:11px;font-weight:700;color:var(--t4);letter-spacing:2px;margin-bottom:12px;">📊 주요 지수</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;text-align:center;">
+          <div>
+            <div style="font-size:10px;color:var(--t4);margin-bottom:4px;">S&P 500</div>
+            <div style="font-family:'JetBrains Mono';font-weight:700;font-size:14px;color:var(--t1);">${spVal?spVal.toFixed(0):'—'}</div>
+            <div style="font-size:11px;color:${spChgPct>=0?'var(--green)':'var(--red)'};">${spChgPct!=null?(spChgPct>=0?'+':'')+spChgPct.toFixed(2)+'%':'—'}</div>
+          </div>
+          <div>
+            <div style="font-size:10px;color:var(--t4);margin-bottom:4px;">NASDAQ</div>
+            <div style="font-family:'JetBrains Mono';font-weight:700;font-size:14px;color:var(--t1);">${nqVal?nqVal.toFixed(0):'—'}</div>
+            <div style="font-size:11px;color:${nqChgPct>=0?'var(--green)':'var(--red)'};">${nqChgPct!=null?(nqChgPct>=0?'+':'')+nqChgPct.toFixed(2)+'%':'—'}</div>
+          </div>
+          <div>
+            <div style="font-size:10px;color:var(--t4);margin-bottom:4px;">VIX 공포지수</div>
+            <div style="font-family:'JetBrains Mono';font-weight:700;font-size:14px;color:${vixColor};">${vixVal?vixVal.toFixed(1):'—'}</div>
+            <div style="font-size:11px;color:${vixColor};">${vixStatus}</div>
+          </div>
+        </div>
+        ${vixChg !== null ? `
+        <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);font-size:12px;color:var(--t3);">
+          VIX ${vixChg>0?'▲':'▼'} <span style="color:${vixChg>2?'var(--red)':vixChg<-2?'var(--green)':'var(--t3)'};">${Math.abs(vixChg).toFixed(2)}</span>
+          ${vixChg>3?'· ⚠️ 변동성 급증 · 주의 필요':vixChg>1?'· 변동성 소폭 상승':vixChg<-3?'· ✅ 변동성 안정':vixChg<-1?'· 변동성 하락':'· 변동성 안정적'}
+        </div>` : ''}
+      </div>`;
+
+    // 시장 뉴스 → Gemini 배치 번역
+    const topNews = Array.isArray(marketNews)
+      ? marketNews.filter(n=>n.headline&&n.url).slice(0,6)
+      : [];
+
+    let newsHtml = '<div class="sec">📰 오늘 시장 주요 뉴스</div>';
+    if (!topNews.length) {
+      newsHtml += '<div class="empty" style="padding:20px;">뉴스를 불러올 수 없습니다</div>';
+    } else {
+      newsHtml += topNews.map((n,i) => `
+        <div class="news-item" onclick="window.open('${n.url}','_blank')" id="mkt-news-${i}">
+          <div class="news-title" id="mkt-title-${i}">${n.headline}</div>
+          <div class="news-summary" id="mkt-sum-${i}" style="color:var(--t4);font-style:italic;">번역 중...</div>
+          <div class="news-meta">
+            <span class="news-src">${n.source||''}</span>
+            <span>${n.datetime?new Date(n.datetime*1000).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}):''}</span>
+          </div>
+        </div>`).join('');
+    }
+
+    el.innerHTML = indexHtml + newsHtml;
+    el.dataset.loaded = '1';
+    marketCacheTs = Date.now();
+
+    // Gemini 번역
+    if (topNews.length) {
+      const batchResult = await geminiBatchNews(topNews);
+      topNews.forEach((_, i) => {
+        const r = batchResult?.[i];
+        const titleEl = document.getElementById(`mkt-title-${i}`);
+        const sumEl   = document.getElementById(`mkt-sum-${i}`);
+        if (titleEl && r?.title) titleEl.textContent = r.title;
+        if (sumEl) {
+          if (r?.summary) { sumEl.textContent=r.summary; sumEl.style.color='var(--t3)'; sumEl.style.fontStyle='normal'; }
+          else sumEl.style.display='none';
+        }
+      });
+    }
+
+  } catch(e) {
+    el.innerHTML = `<div class="empty">시장 현황 로드 실패<br><span style="font-size:12px;color:var(--t4)">${e.message}</span></div>`;
   }
 }
 
